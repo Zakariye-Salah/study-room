@@ -1,163 +1,236 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>  
+<html lang="en" data-theme="light">
+<head>
   <meta charset="UTF-8">
-  <title>Study Room Pro</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Study Room Pro - Secure Learning System</title>
+  <!-- Bootstrap Icons CDN -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
   <link rel="stylesheet" href="style.css">
-  
-  <!-- Firebase Compat Legacy Libraries -->
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <!-- Firebase App & Database Legacy SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
 </head>
 <body>
 
-<!-- THEME CONTROLLER -->
-<div class="theme-toggle-container">
-  <button id="themeToggleBtn" aria-label="Toggle Dark Mode">
-    <!-- Sun Icon -->
-    <svg id="sunIcon" class="hidden" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16">
-      <path d="M8 11a3 3 0 1 1 0-6 3 3 0 0 1 0 6m0 1a4 4 0 1 0 0-8 4 4 0 0 0 0 8M8 0a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-1 0v-2A.5.5 0 0 1 8 0m0 13a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-1 0v-2A.5.5 0 0 1 8 13m8-5a.5.5 0 0 1-.5.5h-2a.5.5 0 0 1 0-1h2a.5.5 0 0 1 .5.5M3 8a.5.5 0 0 1-.5.5h-2a.5.5 0 0 1 0-1h2A.5.5 0 0 1 3 8m10.657-5.657a.5.5 0 0 1 0 .707l-1.414 1.415a.5.5 0 1 1-.707-.708l1.414-1.414a.5.5 0 0 1 .707 0m-9.193 9.193a.5.5 0 0 1 0 .707L3.05 13.657a.5.5 0 0 1-.707-.707l1.414-1.414a.5.5 0 0 1 .707 0m9.193 2.121a.5.5 0 0 1-.707 0l-1.414-1.414a.5.5 0 0 1 .707-.707l1.414 1.414a.5.5 0 0 1 0 .707M4.464 4.465a.5.5 0 0 1-.707 0L2.343 3.05a.5.5 0 1 1 .707-.707l1.414 1.414a.5.5 0 0 1 0 .708"/>
-    </svg>
-    <!-- Moon Icon -->
-    <svg id="moonIcon" class="hidden" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16">
-      <path d="M6 .278a.77.77 0 0 1 .08.858 7.2 7.2 0 0 0-.878 3.46c0 4.021 3.278 7.277 7.318 7.277q.792-.001 1.533-.16a.79.79 0 0 1 .81.316.73.73 0 0 1-.031.893A8.35 8.35 0 0 1 8.344 16C3.734 16 0 12.286 0 7.71 0 4.266 2.114 1.312 5.124.06A.75.75 0 0 1 6 .278M4.858 1.311A7.27 7.27 0 0 0 1.025 7.71c0 4.02 3.279 7.276 7.319 7.276a7.3 7.3 0 0 0 5.205-2.162q-.506.063-1.029.063c-4.61 0-8.343-3.714-8.343-8.29 0-1.167.242-2.278.681-3.286"/>
-    </svg>
-  </button>
-</div>
+  <div id="toastContainer"></div>
 
-<div class="app">
-  <!-- FULL WIDTH HEADER AREA -->
-  <header class="header">
-    <div class="header-title-wrapper">
-      <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="#3b82f6" viewBox="0 0 16 16">
-        <path d="M8.5 2.687c.654-.689 1.782-.886 3.112-.752 1.234.124 2.503.523 3.388.893v9.923c-.918-.35-2.107-.692-3.287-.81-1.094-.111-2.278-.039-3.213.492zM8 1.783C7.015.936 5.587.81 4.287.94c-1.514.153-3.042.672-3.994 1.105A.5.5 0 0 0 0 2.5v11a.5.5 0 0 0 .707.455c.882-.4 2.303-.881 3.68-1.02 1.409-.142 2.59.087 3.223.877a.5.5 0 0 0 .78 0c.633-.79 1.814-1.019 3.222-.877 1.378.139 2.8.62 3.681 1.02A.5.5 0 0 0 16 13.5v-11a.5.5 0 0 0-.293-.455c-.952-.433-2.48-.952-3.994-1.105C10.413.809 8.985.936 8 1.783"/>
-      </svg>
-      <h1>Study Room Pro</h1>
-    </div>
-    <p class="subtitle">Secure Learning System</p>
-  </header>
-
-  <!-- DYNAMIC MOTIVATION BANNER -->
-  <div id="motivationBox">
-    "Focus determines your reality. Let's make today count!"
-  </div>
-
-  <!-- THE TWO-COLUMN RESPONSIVE SPLIT WORKSPACE -->
-  <div class="main-split-container">
+  <!-- MAIN CONTAINER -->
+  <div class="app-container">
     
-    <!-- LEFT SIDE COLUMN: Interactive Panel Controls -->
-    <div class="left-panel">
-      <!-- ONLINE COUNT -->
-      <section class="status-section">
-        <span class="label">Online now</span>
-        <span id="onlineCount" class="count">0</span>
-      </section>
+    <!-- HEADER NAVBAR -->
+    <header class="main-header">
+      <div class="brand">
+        <i class="bi bi-book brand-icon"></i>
+        <div>
+          <h1>Study Room Pro</h1>
+          <p>Secure Learning System</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="themeToggleBtn" class="icon-btn" title="Toggle Theme">
+          <i id="sunIcon" class="bi bi-sun hidden"></i>
+          <i id="moonIcon" class="bi bi-moon-stars"></i>
+        </button>
+        <button id="adminToggleBtn" class="premium-btn admin-trigger">
+          <i class="bi bi-shield-lock"></i> Admin
+        </button>
+      </div>
+    </header>
 
-      <!-- TIMER -->
-      <section class="timer-box">
-        ⏱ Time in room: <span id="timer">0m 0s</span>
-      </section>
+    <!-- MOTIVATIONAL BANNER -->
+    <div id="motivationBox" class="motivation-banner">
+      <i class="bi bi-quote quote-icon"></i>
+      <span id="motivationText">"Focus determines your reality. Let's make today count!"</span>
+    </div>
+
+    <!-- COURSE DASHBOARD ACCESSIBLE EXCLUSIVE BANNER LINK -->
+    <div id="seat03AccessLink" class="course-access-banner hidden">
+      <div class="banner-content">
+        <img src="dugsiie.png" alt="Dugsiie Logo" class="banner-logo" onerror="this.style.display='none';">
+        <div>
+          <h3>Full Stack AI Engineer</h3>
+        </div>
+      </div>
+      <a href="#" class="enter-course-btn">Enter Course <i class="bi bi-arrow-right"></i></a>
+    </div>
+
+    <!-- MAIN GRID LAYOUT -->
+    <div class="dashboard-grid">
       
-      <!-- PERSONAL WEEKLY RECORD METER -->
-      <div id="personalWeeklyBox" class="weekly-total-badge hidden">
-        🗓️ Your Weekly Total: <span id="weeklyMinutesVal">0h:00m</span>
-      </div>
+      <!-- LEFT COLUMN: CONTROL PANEL -->
+      <section class="control-panel panel-card">
+        
+        <!-- ONLINE COUNT BADGE -->
+        <div class="stat-card counter-card">
+          <span class="stat-label"><i class="bi bi-people-fill"></i> Online now</span>
+          <span id="onlineCount" class="stat-value">0</span>
+        </div>
 
-      <!-- EXCLUSIVE DASHBOARD ACCESS BANNER -->
-      <div id="seat03AccessLink" class="hidden">
-        <a href="https://dugsiiye.com/dashboard/student" target="_blank" class="dashboard-link">
-          <img src="dugsiiye.png" alt="Logo">
-          <span>Full Stack AI Engineer</span>
-        </a>
-      </div>
+        <!-- AUTHENTICATION JOIN FORM BOX -->
+        <div id="formBox" class="auth-box animated-fade">
+          <h2 class="section-title"><i class="bi bi-door-open"></i> Join Study Space</h2>
+          <form id="joinForm">
+            <div class="input-group">
+              <i class="bi bi-person input-icon"></i>
+              <input type="text" id="nameInput" placeholder="Full Registered Name" required autocomplete="off">
+            </div>
+            <div class="input-group">
+              <i class="bi bi-chair input-icon"></i>
+              <input type="text" id="codeInput" placeholder="Seat Code (e.g., 01, 05)" required autocomplete="off">
+            </div>
+            <div class="input-group">
+              <i class="bi bi-key input-icon"></i>
+              <input type="password" id="pinInput" placeholder="Secure Seat PIN" required autocomplete="off">
+            </div>
+            <label class="checkbox-container">
+              <input type="checkbox" id="rememberMe">
+              <span class="checkmark"></span>
+              Remember My Credentials Safely
+            </label>
+            <button type="submit" id="joinBtn" class="action-btn primary-btn">
+              <i class="bi bi-box-arrow-in-right"></i> Claim Seat Space
+            </button>
+          </form>
+        </div>
 
-      <!-- STATUS TEXT RECOGNITION BADGE -->
-      <p id="userStatus" class="status-text">Not joined</p>
-
-      <!-- ACTION CONTROL / ACTIONS BUTTONS -->
-      <button id="leaveBtn" class="hidden">Leave Room</button>
-      <div id="pinActionBox" class="hidden" style="margin-top: 12px;">
-        <button id="changePinBtn">Change PIN</button> 
-      </div>
-
-      <!-- MAIN GATE USER INTERFACE JOIN FORM -->
-      <section class="form-section" id="formBox">
-        <form id="joinForm">
-          <input type="text" id="nameInput" placeholder="Your name" required>
-          <input type="text" id="codeInput" placeholder="Seat code (01–05)" maxlength="2" required>
-          <input type="password" id="pinInput" placeholder="Enter PIN" required>
+        <!-- ACTIVE SESSION RUNTIME MONITOR -->
+        <div id="activeSessionBox" class="session-box">
           
-          <div class="remember-box">
-            <input type="checkbox" id="rememberMe">
-            <label for="rememberMe">Remember Me</label>
+          <div class="stat-card live-timer-card">
+            <span class="stat-label"><i class="bi bi-hourglass-split pulse-icon"></i> Time in room</span>
+            <span id="timer" class="stat-value">0m 0s</span>
           </div>
 
-          <button type="submit" id="joinBtn">Join Secure Room</button>
-        </form>
-        
-        <hr>
-        <button type="button" id="adminToggleBtn">Admin Portal Login</button>
-      </section>
-
-      <!-- ADMIN AUTHENTICATION FORM -->
-      <section id="adminAuthBox" class="hidden">
-        <h3>🛡️ Authenticate Admin</h3>
-        <input type="text" id="adminEmail" placeholder="Admin Email">
-        <input type="password" id="adminPassword" placeholder="Admin Password">
-        <div style="display:flex; gap: 10px;">
-          <button id="adminLoginBtn" style="background: #0f172a; color: white;">Login</button>
-          <button id="adminCancelBtn" style="background: #94a3b8; color: white;">Back</button>
-        </div>
-      </section>
-    </div>
-
-    <!-- RIGHT SIDE COLUMN: Live Dynamic Room Feeds -->
-    <div class="right-panel">
-      <!-- ONLINE STUDENTS RECORD LIST -->
-      <section class="users-section">
-        <h3>
-          <span class="live-dot"></span> Online Students
-        </h3>
-        <div id="usersList"></div>
-      </section>
-
-      <!-- ACCORDION COLLAPSIBLE ATTENDANCE LOGS -->
-      <section class="dashboard">
-        <div id="attendanceHeaderBtn">
-          <div class="attendance-title">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-              <path d="M16 14a1 1 0 0 1-1 1H1a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1zm-5.14-7 .307-1.542h-2L8.85 7H7.14l.307-1.542h-2L5.15 7H3.572a.75.75 0 0 0-.14.013L2.5 10.5h2l.307-1.542h1.713l-.307 1.542h2l.307-1.542h1.713l-.307 1.542h2l.854-4.264a.25.25 0 0 0-.244-.286zm-5.63 1.958h-1.713l.215-1.074h1.713zm3.426 0H6.943l.215-1.074h1.713zm3.426 0h-1.713l.215-1.074h1.713z"/>
-            </svg>
-            <span>Attendance Records (Last 5)</span>
+          <!-- PREMIUM TIME METRIC FILTER SELECTION DROPDOWN BUTTON -->
+          <div id="personalWeeklyBox" class="timeframe-dropdown-wrapper hidden">
+            <button id="timeframeDropdownBtn" class="timeframe-select-btn">
+              <span id="selectedTimeframeLabel"><i class="bi bi-calendar-week"></i> Your Weekly Total:</span>
+              <div class="btn-right-block">
+                <span id="weeklyMinutesVal" class="time-val">0h:00m</span>
+                <i id="timeframeChevron" class="bi bi-chevron-down chevron-transition"></i>
+              </div>
+            </button>
+            <ul id="timeframeDropdownMenu" class="timeframe-menu hidden">
+              <li data-value="today"><i class="bi bi-calendar-day"></i> Today's Total</li>
+              <li data-value="week"><i class="bi bi-calendar-week"></i> Weekly Total</li>
+              <li data-value="month"><i class="bi bi-calendar-month"></i> Monthly Total</li>
+              <li data-value="all"><i class="bi bi-infinity"></i> All-Time Total</li>
+            </ul>
           </div>
-          <svg id="attendanceChevron" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-            <path fill-rule="evenodd" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
-          </svg>
+
+          <div id="userStatus" class="status-badge"><i class="bi bi-dash-circle"></i> Not joined</div>
+
+          <div id="pinActionBox" class="session-actions hidden">
+            <button id="leaveBtn" class="action-btn danger-btn hidden">
+              <i class="bi bi-box-arrow-left"></i> Leave Room
+            </button>
+            <button id="changePinBtn" class="action-btn warning-btn">
+              <i class="bi bi-shield-exclamation"></i> Change Secure PIN
+            </button>
+          </div>
         </div>
+
+        <!-- ADMIN AUTHENTICATION PANEL OVERLAY BLOCK -->
+        <div id="adminAuthBox" class="auth-box hidden animated-fade">
+          <h2 class="section-title text-warning"><i class="bi bi-lock-fill"></i> Security Clearance Required</h2>
+          <div class="input-group">
+            <i class="bi bi-envelope input-icon"></i>
+            <input type="email" id="adminEmail" placeholder="Administrator Identity Email">
+          </div>
+          <div class="input-group">
+            <i class="bi bi-file-earmark-lock input-icon"></i>
+            <input type="password" id="adminPassword" placeholder="Clearance Keyphrase">
+          </div>
+          <div class="grid-buttons">
+            <button id="adminLoginBtn" class="action-btn safety-btn"><i class="bi bi-unlock-fill"></i> Authorize</button>
+            <button id="adminCancelBtn" class="action-btn neutral-btn"><i class="bi bi-x-circle"></i> Abort</button>
+          </div>
+        </div>
+
+        <!-- ADMIN MANAGEMENT CONSOLE PANELS -->
+        <div id="adminPanel" class="admin-dashboard-panel hidden animated-fade">
+          <div class="admin-header">
+            <h3><i class="bi bi-speedometer2"></i> Operations Control</h3>
+            <button id="adminLogoutBtn" class="action-btn danger-btn compact-btn"><i class="bi bi-power"></i> Disconnect</button>
+          </div>
+          <div id="adminSeatsDashboard" class="admin-dashboard-grid-list">
+            <!-- Dynamic Injection -->
+          </div>
+        </div>
+
+      </section>
+
+      <!-- RIGHT COLUMN: MONITOR & TRACKING -->
+      <section class="live-activity panel-card">
         
-        <div id="attendanceContent" class="hidden">
-          <div id="attendanceList"></div>
+        <div class="live-students-container">
+          <h2 class="section-title"><span class="live-dot"></span> Online Students Dashboard</h2>
+          <div id="usersList" class="students-list-grid">
+            <!-- Render Dynamic Live Users Inside Workspace -->
+          </div>
         </div>
+
+        <!-- ACCORDION ATTENDANCE TRACKER COLLAPSIBLE SYSTEM -->
+        <div class="accordion-attendance-wrapper">
+          <button id="attendanceHeaderBtn" class="accordion-header-trigger">
+            <span><i class="bi bi-clipboard-check"></i> Attendance Logs (Last 5 Events)</span>
+            <i id="attendanceChevron" class="bi bi-chevron-down transition-rotation"></i>
+          </button>
+          <div id="attendanceContent" class="accordion-panel-content hidden">
+            <div id="attendanceList" class="attendance-logs-flexbox">
+              <!-- Log Data Items -->
+            </div>
+          </div>
+        </div>
+
       </section>
 
-      <!-- DYNAMIC MASTER ADMIN CONTROLS INTERFACE -->
-      <section class="admin-panel hidden" id="adminPanel">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-          <h3>🛡️ Master Admin Control</h3>
-          <button id="adminLogoutBtn">Logout Admin</button>
-        </div>
-        <div id="adminSeatsDashboard"></div>
-      </section>
     </div>
-
   </div>
-</div>
 
-<!-- TOASTS CONTAINER -->
-<div id="toastContainer"></div>
+  <!-- PREMIUM SECURE CHANGE PIN DIALOG FORM MODAL -->
+  <div id="pinModalOverlay" class="modal-blur-overlay hidden">
+    <div class="modal-window scale-animation">
+      <div class="modal-header">
+        <h3><i class="bi bi-shield-plus text-warning"></i> Update Secure PIN</h3>
+        <button id="closePinModalBtn" class="modal-close-x">&times;</button>
+      </div>
+      <form id="securePinUpdateForm">
+        <div class="modal-body">
+          <p>Please supply a new secure numerical passcode below to protect your workspace seat access.</p>
+          <div class="input-group">
+            <i class="bi bi-lock-open input-icon"></i>
+            <input type="password" id="newPinInputField" placeholder="Enter New Secure PIN" required pattern="[0-9A-Za-z]{4,8}" title="PIN must be 4-8 alphanumeric symbols long.">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="cancelPinModalBtn" class="action-btn neutral-btn">Cancel</button>
+          <button type="submit" class="action-btn warning-btn">Save Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
-<script src="database.js"></script>
+  <!-- DESTRUCTIVE CONFIRMATION MODAL OVERLAY INTERFACE -->
+  <div id="confirmationModalOverlay" class="modal-blur-overlay hidden">
+    <div class="modal-window scale-animation warning-border">
+      <div class="modal-header">
+        <h3 id="confirmModalTitle"><i class="bi bi-exclamation-triangle text-danger"></i> Confirmation Required</h3>
+        <button id="closeConfirmModalBtn" class="modal-close-x">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="confirmModalMessage">Are you sure you wish to perform this execution action?</p>
+      </div>
+      <div class="modal-footer">
+        <button id="cancelConfirmModalBtn" class="action-btn neutral-btn">No, Go Back</button>
+        <button id="acceptConfirmModalBtn" class="action-btn danger-btn">Yes, Proceed</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- APPLICATION LOGIC TARGET FILE LINK -->
+  <script src="database.js"></script>
 </body>
 </html>
