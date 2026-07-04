@@ -16,7 +16,6 @@ if (!firebase.apps.length) {
 }
 const db = firebase.database();
 
-// Hardcoded verification matrix 
 const SEATS = {
   "01": { name: "Eng Abuukar", pin: "1111" },
   "02": { name: "Eng Osman", pin: "2222" },
@@ -24,6 +23,14 @@ const SEATS = {
   "04": { name: "Eng Abdi", pin: "4444" },
   "05": { name: "Eng Hassan", pin: "5555" }
 };
+
+const MOTIVATIONS = [
+  "Consistency beats talent every single day. Keep working!",
+  "Small daily steps lead to massive long-term results.",
+  "Your future self will thank you for the focus you put in today.",
+  "Mistakes are proof that you are trying and growing.",
+  "Excellence is not an event, it is a habit. Stay locked in!"
+];
 
 // =========================
 // DOM ELEMENTS
@@ -40,13 +47,18 @@ const leaveBtn = document.getElementById("leaveBtn");
 const changePinBtn = document.getElementById("changePinBtn");
 const pinActionBox = document.getElementById("pinActionBox");
 const userStatus = document.getElementById("userStatus");
+const seat03AccessLink = document.getElementById("seat03AccessLink");
+const motivationBox = document.getElementById("motivationBox");
 
 const onlineCount = document.getElementById("onlineCount");
 const timerBox = document.getElementById("timer");
 const usersList = document.getElementById("usersList");
 const attendanceList = document.getElementById("attendanceList");
 
-// Admin Dashboard Components
+const attendanceHeaderBtn = document.getElementById("attendanceHeaderBtn");
+const attendanceChevron = document.getElementById("attendanceChevron");
+const attendanceContent = document.getElementById("attendanceContent");
+
 const adminToggleBtn = document.getElementById("adminToggleBtn");
 const adminAuthBox = document.getElementById("adminAuthBox");
 const adminEmail = document.getElementById("adminEmail");
@@ -63,8 +75,8 @@ const adminSeatsDashboard = document.getElementById("adminSeatsDashboard");
 let currentUser = null;
 let timerInterval = null;
 let isAdminAuthenticated = false;
+let localizedUserCache = {};
 
-// Universal Feedback System
 function toast(msg, type = "info") {
   const box = document.getElementById("toastContainer");
   if (!box) return;
@@ -75,7 +87,6 @@ function toast(msg, type = "info") {
   setTimeout(() => div.remove(), 3000);
 }
 
-// Convert Milliseconds to Human Readable format
 function formatTime(ms) {
   const s = Math.floor(ms / 1000);
   return `${Math.floor(s / 60)}m ${s % 60}s`;
@@ -94,16 +105,41 @@ function stopTimer() {
   timerBox.innerText = "0m 0s";
 }
 
-// Update Status text cleanly
 function setStatusText(joined, seat = "") {
   if (joined) {
     userStatus.textContent = `Joined (Seat ${seat})`;
     userStatus.classList.add("active");
+    if (seat === "03") {
+      seat03AccessLink.classList.remove("hidden");
+    }
   } else {
     userStatus.textContent = "Not joined";
     userStatus.classList.remove("active");
+    seat03AccessLink.classList.add("hidden");
   }
 }
+
+// Rotate motivational quotes cleanly localizing experience
+function rotateMotivationText() {
+  const randomIndex = Math.floor(Math.random() * MOTIVATIONS.length);
+  motivationBox.textContent = `"${MOTIVATIONS[randomIndex]}"`;
+}
+rotateMotivationText();
+setInterval(rotateMotivationText, 60000);
+
+// =========================
+// ACCORDION TOGGLE EVENT
+// =========================
+attendanceHeaderBtn.addEventListener("click", () => {
+  const isHidden = attendanceContent.classList.contains("hidden");
+  if (isHidden) {
+    attendanceContent.classList.remove("hidden");
+    attendanceChevron.style.transform = "rotate(180deg)";
+  } else {
+    attendanceContent.classList.add("hidden");
+    attendanceChevron.style.transform = "rotate(0deg)";
+  }
+});
 
 // =========================
 // ROOM TRANSACTIONS
@@ -117,14 +153,12 @@ async function joinRoom(name, code, pin) {
     return;
   }
 
-  // Real-time Database block check verification
   const blockSnap = await db.ref(`blockedSeats/${normalizedCode}`).get();
   if (blockSnap.val() === true) {
     toast("This seat is currently blocked by Admin", "error");
     return;
   }
 
-  // Dynamic remote PIN resolution in case it was altered
   let correctPin = targetSeat.pin;
   const customPinSnap = await db.ref(`customPins/${normalizedCode}`).get();
   if (customPinSnap.exists()) {
@@ -157,7 +191,6 @@ async function joinRoom(name, code, pin) {
     start: Date.now()
   };
 
-  // Safe Remember Me persist mechanics
   if (rememberMe.checked) {
     localStorage.setItem("remembered_name", name);
     localStorage.setItem("remembered_code", normalizedCode);
@@ -182,7 +215,6 @@ async function joinRoom(name, code, pin) {
 
   toast(`Welcome ${targetSeat.name} (Seat ${normalizedCode})`, "success");
   
-  // UI Switch states
   formBox.classList.add("hidden");
   leaveBtn.classList.remove("hidden");
   pinActionBox.classList.remove("hidden");
@@ -202,7 +234,6 @@ async function leaveRoom(auto = false) {
   currentUser = null;
   stopTimer();
 
-  // Return components to defaults
   formBox.classList.remove("hidden");
   leaveBtn.classList.add("hidden");
   pinActionBox.classList.add("hidden");
@@ -254,37 +285,52 @@ changePinBtn.addEventListener("click", async () => {
 });
 
 // =========================
-// REAL-TIME SYNCHRONIZATIONS
+// LOW-BANDWIDTH EVENT-BASED SYNCHRONIZATIONS
 // =========================
-db.ref("onlineUsers").on("value", (snap) => {
-  const data = snap.val() || {};
+function renderOnlineUI() {
   usersList.innerHTML = "";
-  const currentCount = Object.keys(data).length;
-  onlineCount.innerText = currentCount;
+  const usersArray = Object.values(localizedUserCache);
+  onlineCount.innerText = usersArray.length;
 
-  Object.values(data).forEach((u) => {
+  usersArray.forEach((u) => {
     const div = document.createElement("div");
     div.className = "user-card";
     div.innerHTML = `<span class="name">${u.name}</span><span class="code">Seat ${u.code}</span>`;
     usersList.appendChild(div);
   });
 
-  // Self Kick Enforcement tracking layer loop logic
   const currentSavedSession = localStorage.getItem("active_user");
-  if (currentSavedSession && !data[currentSavedSession] && currentUser) {
+  if (currentSavedSession && !localizedUserCache[currentSavedSession] && currentUser) {
     leaveRoom(true);
   }
+}
+
+db.ref("onlineUsers").on("child_added", (snap) => {
+  localizedUserCache[snap.key] = snap.val();
+  renderOnlineUI();
 });
 
-db.ref("attendance").limitToLast(6).on("value", (snap) => {
-  attendanceList.innerHTML = "";
-  snap.forEach((child) => {
-    const d = child.val();
-    const div = document.createElement("div");
-    div.className = "att-item";
-    div.innerText = `${d.name} (${d.code}) - ${d.action} - ${new Date(d.time).toLocaleTimeString()}`;
-    attendanceList.insertBefore(div, attendanceList.firstChild);
-  });
+db.ref("onlineUsers").on("child_removed", (snap) => {
+  delete localizedUserCache[snap.key];
+  renderOnlineUI();
+});
+
+db.ref("onlineUsers").on("child_changed", (snap) => {
+  localizedUserCache[snap.key] = snap.val();
+  renderOnlineUI();
+});
+
+// Sync Attendance Stream using child hooks (Avoids reloading the whole log)
+db.ref("attendance").limitToLast(12).on("child_added", (snap) => {
+  const d = snap.val();
+  const div = document.createElement("div");
+  div.className = "att-item";
+  div.style.cssText = "padding: 6px 8px; font-size: 13px; border-bottom: 1px solid #f1f5f9; color: #475569;";
+  
+  const labelColor = d.action === "join" ? "#22c55e" : "#ef4444";
+  div.innerHTML = `<strong>${d.name}</strong> (Seat ${d.code}) - <span style="color: ${labelColor}; font-weight:600;">${d.action}</span> - <span style="font-size:11px; color:#94a3b8;">${new Date(d.time).toLocaleTimeString()}</span>`;
+  
+  attendanceList.insertBefore(div, attendanceList.firstChild);
 });
 
 // =========================
