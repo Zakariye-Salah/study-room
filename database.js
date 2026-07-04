@@ -90,7 +90,6 @@ function toast(msg, type = "info") {
   setTimeout(() => div.remove(), 3000);
 }
 
-// Format milliseconds strictly to requested 0h:00m format
 function formatHoursMinutes(ms) {
   const totalMinutes = Math.floor(ms / 60000);
   const hours = Math.floor(totalMinutes / 60);
@@ -105,11 +104,9 @@ function formatLiveSeconds(ms) {
   return `${minutes}m ${secs}s`;
 }
 
-// Get the current week timestamp identifier starting from Saturday
 function getWeekIdentifier() {
   const current = new Date();
-  const currentDay = current.getDay(); // Sunday=0, Monday=1, ..., Saturday=6
-  // Shift day index so Saturday becomes day 0 of the study week
+  const currentDay = current.getDay(); 
   const shift = (currentDay + 1) % 7; 
   const saturdayDate = new Date(current);
   saturdayDate.setDate(current.getDate() - shift);
@@ -179,11 +176,12 @@ async function syncPersonalWeeklyAccumulatedTime(seatCode) {
   });
 }
 
+// FIXED: Dashboard image link is now fully visible to ANY seat layout selection
 function setStatusText(joined, seat = "") {
   if (joined) {
     userStatus.textContent = `Joined (Seat ${seat})`;
     userStatus.classList.add("active");
-    if (seat === "03") seat03AccessLink.classList.remove("hidden");
+    seat03AccessLink.classList.remove("hidden"); 
   } else {
     userStatus.textContent = "Not joined";
     userStatus.classList.remove("active");
@@ -192,7 +190,7 @@ function setStatusText(joined, seat = "") {
 }
 
 // =========================
-// CORE CORE TRANSACTION LAYERS
+// CORE TRANSACTION LAYERS
 // =========================
 async function joinRoom(name, code, pin) {
   const normalizedCode = code.trim();
@@ -285,7 +283,6 @@ async function leaveRoom(auto = false) {
   pinActionBox.classList.add("hidden");
   setStatusText(false);
 
-  // Safely save the accrued run hours to weekly database node
   const currentWeekId = getWeekIdentifier();
   const weekRef = db.ref(`weeklyHours/${currentWeekId}/${code}`);
   await weekRef.transaction((currentValue) => {
@@ -330,7 +327,6 @@ function renderOnlineUI() {
   });
 }
 
-// Update the elapsed duration on user cards every minute precisely
 clearInterval(liveCardsInterval);
 liveCardsInterval = setInterval(() => {
   document.querySelectorAll(".user-card").forEach((card) => {
@@ -347,12 +343,10 @@ db.ref("onlineUsers").on("value", (snap) => {
   renderOnlineUI();
 });
 
-// Sync Attendance Stream and strictly limit UI to last 5 entries
 db.ref("attendance").limitToLast(5).on("value", (snap) => {
   attendanceList.innerHTML = "";
   const records = snap.val() || {};
   
-  // Render records reversed order (Newest on Top)
   Object.keys(records).reverse().forEach((key) => {
     const d = records[key];
     const div = document.createElement("div");
