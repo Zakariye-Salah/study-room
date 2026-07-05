@@ -81,6 +81,33 @@ const cancelConfirmModalBtn = document.getElementById("cancelConfirmModalBtn");
 const acceptConfirmModalBtn = document.getElementById("acceptConfirmModalBtn");
 const closeConfirmModalBtn = document.getElementById("closeConfirmModalBtn");
 
+// DYNAMIC CORE INTEGRATION ARCHITECTURE NODES
+const btnTriggerEnterCourseEmbed = document.getElementById("btnTriggerEnterCourseEmbed");
+const courseEmbedContainer = document.getElementById("courseEmbedContainer");
+const courseIframeElement = document.getElementById("courseIframeElement");
+const btnCloseCourseEmbed = document.getElementById("btnCloseCourseEmbed");
+const btnToggleFullScreen = document.getElementById("btnToggleFullScreen");
+const btnMinimizeCourse = document.getElementById("btnMinimizeCourse");
+const courseFrameUserSeatBadge = document.getElementById("courseFrameUserSeatBadge");
+
+const headerNotificationBellBtn = document.getElementById("headerNotificationBellBtn");
+const bellUnreadCounterBadge = document.getElementById("bellUnreadCounterBadge");
+const bellNotificationsDropdownPanel = document.getElementById("bellNotificationsDropdownPanel");
+const bellMessagesListContainer = document.getElementById("bellMessagesListContainer");
+const btnLoadAllMessagesView = document.getElementById("btnLoadAllMessagesView");
+const btnToggleAdminComposer = document.getElementById("btnToggleAdminComposer");
+const adminMessageComposerArea = document.getElementById("adminMessageComposerArea");
+const adminMsgTitleInput = document.getElementById("adminMsgTitleInput");
+const adminMsgBodyInput = document.getElementById("adminMsgBodyInput");
+const btnAdminBroadcastSubmit = document.getElementById("btnAdminBroadcastSubmit");
+
+const quickStudentMessageModal = document.getElementById("quickStudentMessageModal");
+const btnCloseMessageModal = document.getElementById("btnCloseMessageModal");
+const btnCancelMessageModal = document.getElementById("btnCancelMessageModal");
+const btnSubmitQuickStudentMessage = document.getElementById("btnSubmitQuickStudentMessage");
+const lblRemainingMsgBudgetCounter = document.getElementById("lblRemainingMsgBudgetCounter");
+const customQuickTextMessageInput = document.getElementById("customQuickTextMessageInput");
+
 // ==========================================================================
 // STATE MANAGEMENT CACHE ENGINE
 // ==========================================================================
@@ -91,6 +118,8 @@ let isAdminAuthenticated = false;
 let localizedUserCache = {};
 let currentSelectedTimeframe = localStorage.getItem("user_selected_timeframe") || "week";
 let pendingConfirmationAction = null;
+let activeMessageTargetUser = null;
+let showAllMessagesFlag = false;
 
 function toast(msg, type = "info") {
   const box = document.getElementById("toastContainer");
@@ -177,9 +206,14 @@ timeframeDropdownBtn.addEventListener("click", (e) => {
   }
 });
 
-document.addEventListener("click", () => {
-  timeframeDropdownMenu.classList.add("hidden");
-  timeframeChevron.classList.remove("chevron-rotate");
+document.addEventListener("click", (e) => {
+  if (!timeframeDropdownBtn.contains(e.target)) {
+    timeframeDropdownMenu.classList.add("hidden");
+    timeframeChevron.classList.remove("chevron-rotate");
+  }
+  if (!headerNotificationBellBtn.contains(e.target) && !bellNotificationsDropdownPanel.contains(e.target) && !quickStudentMessageModal.contains(e.target)) {
+    bellNotificationsDropdownPanel.classList.add("hidden");
+  }
 });
 
 timeframeDropdownMenu.querySelectorAll("li").forEach(item => {
@@ -230,7 +264,6 @@ async function syncPersonalAccumulatedTime(seatCode) {
   db.ref(path).on("value", async (snap) => {
     let historicalMs = snap.val() || 0;
     
-    // LOGICAL ASSURANCE ENGINE: If user is actively logged in, add their live counter
     if (currentUser && currentUser.code === seatCode) {
       historicalMs += (Date.now() - currentUser.start);
     }
@@ -245,10 +278,13 @@ function setStatusText(joined, seat = "") {
     userStatus.innerHTML = `<i class="bi bi-check-circle-fill"></i> Joined (Seat ${seat})`;
     userStatus.className = "status-badge active";
     seat03AccessLink.classList.remove("hidden"); 
+    courseFrameUserSeatBadge.innerText = `Seat ${seat}`;
   } else {
     userStatus.innerHTML = `<i class="bi bi-dash-circle"></i> Not joined`;
     userStatus.className = "status-badge";
     seat03AccessLink.classList.add("hidden");
+    courseFrameUserSeatBadge.innerText = `Seat --`;
+    closeCourseEmbedWindow();
   }
 }
 
@@ -296,7 +332,8 @@ async function joinRoom(name, code, pin) {
     id: userId,
     name: targetSeat.name,
     code: normalizedCode,
-    start: Date.now()
+    start: Date.now(),
+    inCourse: false
   };
 
   if (rememberMe.checked) {
@@ -329,6 +366,7 @@ async function joinRoom(name, code, pin) {
   startTimer();
   syncPersonalAccumulatedTime(normalizedCode);
   localStorage.setItem("active_user", userId);
+  listenToActiveKicks(userId);
 }
 
 async function leaveRoom(auto = false) {
@@ -341,13 +379,13 @@ async function leaveRoom(auto = false) {
 
   currentUser = null;
   stopTimer();
+  closeCourseEmbedWindow();
 
   formBox.classList.remove("hidden");
   leaveBtn.classList.add("hidden");
   pinActionBox.classList.add("hidden");
   setStatusText(false);
 
-  // Securely update structural session tracking dimensions across paths
   await db.ref(`weeklyHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
   await db.ref(`dailyHours/${getTodayIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
   await db.ref(`monthlyHours/${getMonthIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
@@ -367,8 +405,332 @@ async function leaveRoom(auto = false) {
   localStorage.removeItem("active_user");
 }
 
+function listenToActiveKicks(userId) {
+  db.ref("onlineUsers/" + userId).on("value", (snap) => {
+    if (!snap.exists() && currentUser) {
+      leaveRoom(true);
+    }
+  });
+}
+
 // ==========================================================================
-// SECURE MODAL INTERACTION CONFIGURATION FOR PIN PASSCODE CHANGES
+// EMBEDDED IFRAME COURSE CONTAINER MANAGEMENT ENGINE
+// ==========================================================================
+async function openCourseEmbedWindow() {
+  if (!currentUser) return;
+  
+  const snap = await db.ref("onlineUsers").get();
+  let courseOccupied = false;
+  if (snap.exists()) {
+    Object.values(snap.val()).forEach(u => {
+      if (u.inCourse && u.id !== currentUser.id) courseOccupied = true;
+    });
+  }
+
+  if (courseOccupied) {
+    toast("Course access is limited to 1 user concurrently across rooms.", "error");
+    return;
+  }
+
+  currentUser.inCourse = true;
+  await db.ref("onlineUsers/" + currentUser.id + "/inCourse").set(true);
+  
+  courseIframeElement.src = "https://dugsiiye.com/dashboard/student";
+  courseEmbedContainer.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+}
+
+async function closeCourseEmbedWindow() {
+  courseEmbedContainer.classList.add("hidden");
+  courseIframeElement.src = "";
+  document.body.style.overflow = "";
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+  }
+  if (currentUser && currentUser.inCourse) {
+    currentUser.inCourse = false;
+    await db.ref("onlineUsers/" + currentUser.id + "/inCourse").set(false);
+  }
+}
+
+btnTriggerEnterCourseEmbed.addEventListener("click", openCourseEmbedWindow);
+btnCloseCourseEmbed.addEventListener("click", closeCourseEmbedWindow);
+btnMinimizeCourse.addEventListener("click", () => {
+  courseEmbedContainer.classList.add("hidden");
+  document.body.style.overflow = "";
+});
+
+btnToggleFullScreen.addEventListener("click", () => {
+  const frame = document.querySelector(".course-window-frame");
+  if (!document.fullscreenElement) {
+    frame.requestFullscreen().catch(err => {
+      toast(`Error enabling fullscreen: ${err.message}`, "error");
+    });
+  } else {
+    document.exitFullscreen();
+  }
+});
+
+// ==========================================================================
+// DYNAMIC BROADCAST SYSTEM & BELL SYSTEMS ENGINE (WITH ACTION SEPARATIONS)
+// ==========================================================================
+headerNotificationBellBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const isHidden = bellNotificationsDropdownPanel.classList.contains("hidden");
+  if (isHidden) {
+    bellNotificationsDropdownPanel.classList.remove("hidden");
+    db.ref("bellUnreadCounts/" + (currentUser ? currentUser.id : "guest")).set(0);
+    bellUnreadCounterBadge.classList.add("hidden");
+  } else {
+    bellNotificationsDropdownPanel.classList.add("hidden");
+  }
+});
+
+btnToggleAdminComposer.addEventListener("click", () => {
+  adminMessageComposerArea.classList.toggle("expanded");
+  const isExpanded = adminMessageComposerArea.classList.contains("expanded");
+  btnToggleAdminComposer.innerHTML = isExpanded ? `<i class="bi bi-dash-circle"></i>` : `<i class="bi bi-plus-circle"></i>`;
+});
+
+function listenToGlobalBroadcastAlerts() {
+  const idKey = currentUser ? currentUser.id : "guest";
+  
+  db.ref("bellUnreadCounts/" + idKey).on("value", (snap) => {
+    const counts = snap.val() || 0;
+    if (counts > 0) {
+      bellUnreadCounterBadge.innerText = counts;
+      bellUnreadCounterBadge.classList.remove("hidden");
+    } else {
+      bellUnreadCounterBadge.classList.add("hidden");
+    }
+  });
+
+  db.ref("broadcastAlerts").orderByChild("timestamp").on("value", (snap) => {
+    bellMessagesListContainer.innerHTML = "";
+    const data = snap.val() || {};
+    
+    let entries = Object.keys(data).map(key => ({
+      id: key,
+      ...data[key]
+    })).reverse();
+    
+    if (!showAllMessagesFlag) {
+      entries = entries.slice(0, 5); 
+    }
+
+    if (entries.length === 0) {
+      bellMessagesListContainer.innerHTML = `<div class="empty-bell-fallback">No notifications found.</div>`;
+      return;
+    }
+
+    entries.forEach(m => {
+      const card = document.createElement("div");
+      card.className = m.seatCode === "Admin" ? "bell-msg-item warning-border" : "bell-msg-item";
+      
+      const isOwnMessage = currentUser && currentUser.code === m.seatCode;
+      const isMsgFromAdmin = m.seatCode === "Admin";
+      
+      let actionButtons = `<div class="bell-msg-actions">`;
+      
+      if (isAdminAuthenticated) {
+        if (isMsgFromAdmin) {
+          actionButtons += `<a href="javascript:void(0)" onclick="editMessage('${m.id}', '${escapeHtml(m.title)}', '${escapeHtml(m.body)}')" class="text-warning" title="Edit"><i class="bi bi-pencil-square"></i></a>`;
+        }
+        actionButtons += `<a href="javascript:void(0)" onclick="deleteMessage('${m.id}')" class="text-danger" style="color:var(--color-danger) !important;" title="Delete"><i class="bi bi-trash"></i></a>`;
+      } else if (isOwnMessage) {
+        actionButtons += `<a href="javascript:void(0)" onclick="deleteMessage('${m.id}')" class="text-danger" style="color:var(--color-danger) !important;" title="Delete"><i class="bi bi-trash"></i></a>`;
+      }
+      
+      actionButtons += `</div>`;
+
+      card.innerHTML = `
+        <div class="bell-msg-meta">
+          <div>
+            <span class="bell-msg-sender"><i class="bi bi-hash"></i> ${m.seatCode === 'Admin' ? 'Admin' : 'Seat ' + m.seatCode}</span>
+            <span class="bell-msg-time" style="margin-left:8px;">${new Date(m.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+          </div>
+          ${actionButtons}
+        </div>
+        <h4 class="bell-msg-title" id="title-${m.id}">${escapeHtml(m.title)}</h4>
+        <p class="bell-msg-body" id="body-${m.id}">${escapeHtml(m.body)}</p>
+      `;
+      bellMessagesListContainer.appendChild(card);
+    });
+  });
+}
+
+window.deleteMessage = function(messageId) {
+  openConfirmationModal(
+    "Delete Alert Message",
+    "Are you sure you want to completely delete this message broadcast alert?",
+    async () => {
+      await db.ref("broadcastAlerts/" + messageId).remove();
+      toast("Message deleted successfully!", "success");
+    }
+  );
+};
+
+window.editMessage = function(messageId, currentTitle, currentBody) {
+  if (!isAdminAuthenticated) return;
+  adminMsgTitleInput.value = currentTitle;
+  adminMsgBodyInput.value = currentBody;
+  
+  if (!adminMessageComposerArea.classList.contains("expanded")) {
+    btnToggleAdminComposer.click();
+  }
+  
+  btnAdminBroadcastSubmit.onerror = btnAdminBroadcastSubmit.onclick; 
+  btnAdminBroadcastSubmit.onclick = async () => {
+    const updatedTitle = adminMsgTitleInput.value.trim();
+    const updatedBody = adminMsgBodyInput.value.trim();
+    
+    if (!updatedTitle || !updatedBody) {
+      toast("Please complete all message entry spaces first", "error");
+      return;
+    }
+
+    await db.ref("broadcastAlerts/" + messageId).update({
+      title: updatedTitle,
+      body: updatedBody,
+      timestamp: Date.now()
+    });
+
+    adminMsgTitleInput.value = "";
+    adminMsgBodyInput.value = "";
+    btnToggleAdminComposer.click();
+    toast("Broadcast alert updated successfully!", "success");
+    
+    btnAdminBroadcastSubmit.onclick = btnAdminBroadcastSubmit.onerror; 
+  };
+  
+  toast("Message loaded into composer context for editing.", "info");
+};
+
+function escapeHtml(str) {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+btnLoadAllMessagesView.addEventListener("click", () => {
+  showAllMessagesFlag = !showAllMessagesFlag;
+  btnLoadAllMessagesView.innerText = showAllMessagesFlag ? "Show Less" : "View All";
+});
+
+btnAdminBroadcastSubmit.addEventListener("click", async () => {
+  if (!isAdminAuthenticated) return;
+  const title = adminMsgTitleInput.value.trim();
+  const body = adminMsgBodyInput.value.trim();
+
+  if (!title || !body) {
+    toast("Please enter both alert title and details", "error");
+    return;
+  }
+
+  const alertPayload = {
+    title: title,
+    body: body,
+    seatCode: "Admin",
+    timestamp: Date.now()
+  };
+
+  await db.ref("broadcastAlerts").push(alertPayload);
+  
+  const usersSnap = await db.ref("onlineUsers").get();
+  if (usersSnap.exists()) {
+    Object.keys(usersSnap.val()).forEach(uid => {
+      db.ref("bellUnreadCounts/" + uid).transaction(c => (c || 0) + 1);
+    });
+  }
+  db.ref("bellUnreadCounts/guest").transaction(c => (c || 0) + 1);
+
+  adminMsgTitleInput.value = "";
+  adminMsgBodyInput.value = "";
+  btnToggleAdminComposer.click();
+  toast("Broadcast alert transmitted successfully!", "success");
+});
+
+// ==========================================================================
+// STUDENT QUICK TEMPLATE MESSAGING SYSTEM CONTROLLERS
+// ==========================================================================
+window.openQuickMessagingModal = async function(targetUserId, targetSeatCode) {
+  if (!currentUser) {
+    toast("You must claim a space seat to interact.", "error");
+    return;
+  }
+  if (currentUser.id !== targetUserId) {
+    toast("You can only transmit alerts from your own assigned seat workspace dashboard profile.", "error");
+    return;
+  }
+  
+  activeMessageTargetUser = { id: targetUserId, seat: targetSeatCode };
+  
+  const todayId = getTodayIdentifier();
+  const budgetSnap = await db.ref(`messageBudgets/${todayId}/${currentUser.id}`).get();
+  const currentUsed = budgetSnap.val() || 0;
+  const remaining = Math.max(0, 3 - currentUsed);
+
+  lblRemainingMsgBudgetCounter.innerText = remaining;
+  customQuickTextMessageInput.value = "";
+  quickStudentMessageModal.classList.remove("hidden");
+};
+
+function closeQuickMessagingModalWindow() {
+  quickStudentMessageModal.classList.add("hidden");
+  activeMessageTargetUser = null;
+}
+
+[btnCloseMessageModal, btnCancelMessageModal].forEach(b => b.addEventListener("click", closeQuickMessagingModalWindow));
+
+document.querySelectorAll(".template-msg-pill").forEach(pill => {
+  pill.addEventListener("click", () => {
+    customQuickTextMessageInput.value = pill.getAttribute("data-msg");
+  });
+});
+
+btnSubmitQuickStudentMessage.addEventListener("click", async () => {
+  if (!currentUser || !activeMessageTargetUser) return;
+  
+  const todayId = getTodayIdentifier();
+  const budgetRef = db.ref(`messageBudgets/${todayId}/${currentUser.id}`);
+  const budgetSnap = await budgetRef.get();
+  const currentUsed = budgetSnap.val() || 0;
+
+  if (currentUsed >= 3) {
+    toast("You have exhausted your daily allowance of 3 room messages.", "error");
+    closeQuickMessagingModalWindow();
+    return;
+  }
+
+  const msgText = customQuickTextMessageInput.value.trim();
+  if (!msgText) {
+    toast("Please pick or type a message content snippet first", "warning");
+    return;
+  }
+
+  const broadcastPayload = {
+    title: `${currentUser.name} Status Alert`,
+    body: msgText,
+    seatCode: currentUser.code,
+    timestamp: Date.now()
+  };
+
+  await db.ref("broadcastAlerts").push(broadcastPayload);
+  await budgetRef.set(currentUsed + 1);
+
+  const usersSnap = await db.ref("onlineUsers").get();
+  if (usersSnap.exists()) {
+    Object.keys(usersSnap.val()).forEach(uid => {
+      if (uid !== currentUser.id) {
+        db.ref("bellUnreadCounts/" + uid).transaction(c => (c || 0) + 1);
+      }
+    });
+  }
+
+  toast("Quick status warning transmitted!", "success");
+  closeQuickMessagingModalWindow();
+});
+
+// ==========================================================================
+// PIN ACTIONS
 // ==========================================================================
 changePinBtn.addEventListener("click", () => {
   newPinInputField.value = "";
@@ -416,18 +778,26 @@ function renderOnlineUI() {
     const div = document.createElement("div");
     div.className = "user-card";
     div.setAttribute("data-start", u.start);
+    
+    const courseStatusBadge = u.inCourse ? `<span class="in-course-indicator-tag"><i class="bi bi-mortarboard-fill"></i> Signed In</span>` : '';
+    const messageActionBtn = (currentUser && currentUser.id === u.id) 
+      ? `<button onclick="openQuickMessagingModal('${u.id}', '${u.code}')" class="student-msg-icon-trigger" title="Send Status Alert"><i class="bi bi-envelope"></i></button>` 
+      : '';
+
     div.innerHTML = `
       <div class="left-info-block">
-        <span class="name"><i class="bi bi-person-workspace"></i> ${u.name}</span>
+        <span class="name"><i class="bi bi-person-workspace"></i> ${u.name} ${courseStatusBadge}</span>
         <span class="live-elapsed-badge"><i class="bi bi-clock-history"></i> ${formatHoursMinutes(elapsedMs)}</span>
       </div>
-      <span class="code"><i class="bi bi-pin-angle"></i> Seat ${u.code}</span>
+      <div class="right-action-block" style="display:flex; align-items:center; gap:8px;">
+        ${messageActionBtn}
+        <span class="code"><i class="bi bi-pin-angle"></i> Seat ${u.code}</span>
+      </div>
     `;
     usersList.appendChild(div);
   });
 }
 
-// Update runtime counters smoothly every minute
 clearInterval(liveCardsInterval);
 liveCardsInterval = setInterval(() => {
   document.querySelectorAll(".user-card").forEach((card) => {
@@ -437,7 +807,6 @@ liveCardsInterval = setInterval(() => {
       if (badge) badge.innerHTML = `<i class="bi bi-clock-history"></i> ${formatHoursMinutes(Date.now() - startStamp)}`;
     }
   });
-  // Also keep dropdown stats synced live while logged in
   if (currentUser) {
     syncPersonalAccumulatedTime(currentUser.code);
   }
@@ -464,7 +833,6 @@ db.ref("attendance").limitToLast(5).on("value", (snap) => {
   });
 });
 
-// ACCORDION BOX HANDLING
 attendanceHeaderBtn.addEventListener("click", () => {
   const isHidden = attendanceContent.classList.contains("hidden");
   if (isHidden) {
@@ -476,9 +844,6 @@ attendanceHeaderBtn.addEventListener("click", () => {
   }
 });
 
-// ==========================================================================
-// CLICK ACTION EVENT CAPTURING HANDLERS
-// ==========================================================================
 form.addEventListener("submit", (e) => {
   e.preventDefault();
   joinRoom(nameInput.value.trim(), codeInput.value.trim(), pinInput.value.trim());
@@ -493,7 +858,7 @@ leaveBtn.addEventListener("click", () => {
 });
 
 // ==========================================================================
-// ADMINISTRATIVE PRIVILEGE CONTROL OVERLAYS
+// ADMINISTRATIVE PRIVILEGE DASHBOARD METRICS
 // ==========================================================================
 adminToggleBtn.addEventListener("click", () => {
   adminAuthBox.classList.remove("hidden");
@@ -536,7 +901,7 @@ function syncAdminDashboardMetrics() {
 
             row.innerHTML = `
               <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px;">
-                <div><strong>Seat ${seatId}:</strong> statusStr</div>
+                <div><strong>Seat ${seatId}:</strong> ${statusStr}</div>
                 <div style="color:#ea580c; font-weight:bold;"><i class="bi bi-shield-lock"></i> PIN: ${currentActivePin}</div>
               </div>
               <div style="font-size:12px; color:var(--text-secondary); margin-bottom:6px;">
@@ -565,6 +930,7 @@ adminLoginBtn.addEventListener("click", async () => {
       toast("Admin Authorized Successfully", "success");
       adminAuthBox.classList.add("hidden");
       adminPanel.classList.remove("hidden");
+      btnToggleAdminComposer.classList.remove("hidden"); 
       syncAdminDashboardMetrics();
     } else {
       toast("Unauthorized account context profile detected.", "error");
@@ -581,6 +947,8 @@ adminLogoutBtn.addEventListener("click", () => {
       firebase.auth().signOut().catch(() => {});
       isAdminAuthenticated = false;
       adminPanel.classList.add("hidden");
+      btnToggleAdminComposer.classList.add("hidden");
+      adminMessageComposerArea.classList.remove("expanded");
       if (!currentUser) formBox.classList.remove("hidden");
       toast("Admin Disconnected Safely", "info");
     }
@@ -626,7 +994,7 @@ window.remoteToggleBlockSeat = async function(seatCode, currentBlockStatus) {
 };
 
 // ==========================================================================
-// LIGHT/DARK MODE CONTROLLERS
+// LIGHT/DARK THEME MANAGEMENT
 // ==========================================================================
 const themeToggleBtn = document.getElementById("themeToggleBtn");
 const sunIcon = document.getElementById("sunIcon");
@@ -660,9 +1028,9 @@ themeToggleBtn.addEventListener("click", () => {
 });
 
 // ==========================================================================
-// AUTO-PERSISTENT APPLICATION STATE LOADING ENGINES
+// PERSISTENT REFRESH GUARD ENGINES
 // ==========================================================================
-window.addEventListener("DOMContentLoaded", async () => {
+window.addEventListener("DOMContentLoaded", () => {
   initializeThemeSystem();
   updateTimeframeButtonLabelText();
 
@@ -673,19 +1041,35 @@ window.addEventListener("DOMContentLoaded", async () => {
     rememberMe.checked = true;
   }
 
-  const saved = localStorage.getItem("active_user");
-  if (!saved) return;
-
-  const snap = await db.ref("onlineUsers/" + saved).get();
-  if (snap.exists()) {
-    currentUser = snap.val();
-    formBox.classList.add("hidden");
-    leaveBtn.classList.remove("hidden");
-    pinActionBox.classList.remove("hidden");
-    setStatusText(true, currentUser.code);
-    startTimer();
-    syncPersonalAccumulatedTime(currentUser.code);
-  } else {
-    localStorage.removeItem("active_user");
-  }
+  // Persistent Admin/Student State Authentication Refresh Guard
+  firebase.auth().onAuthStateChanged(async (user) => {
+    if (user && user.uid === "trlabHsJKARs1Emga5dQEN7SfKS2") {
+      isAdminAuthenticated = true;
+      adminAuthBox.classList.add("hidden");
+      formBox.classList.add("hidden");
+      adminPanel.classList.remove("hidden");
+      btnToggleAdminComposer.classList.remove("hidden");
+      syncAdminDashboardMetrics();
+    }
+    
+    // Sync active student profile logic cleanly
+    const savedStudentId = localStorage.getItem("active_user");
+    if (savedStudentId) {
+      const snap = await db.ref("onlineUsers/" + savedStudentId).get();
+      if (snap.exists()) {
+        currentUser = snap.val();
+        formBox.classList.add("hidden");
+        leaveBtn.classList.remove("hidden");
+        pinActionBox.classList.remove("hidden");
+        setStatusText(true, currentUser.code);
+        startTimer();
+        syncPersonalAccumulatedTime(currentUser.code);
+        listenToActiveKicks(savedStudentId);
+      } else {
+        localStorage.removeItem("active_user");
+      }
+    }
+    
+    listenToGlobalBroadcastAlerts();
+  });
 });
