@@ -94,6 +94,7 @@ const btnCloseCourseEmbed = document.getElementById("btnCloseCourseEmbed");
 const btnToggleFullScreen = document.getElementById("btnToggleFullScreen");
 const btnMinimizeCourse = document.getElementById("btnMinimizeCourse");
 const courseFrameUserSeatBadge = document.getElementById("courseFrameUserSeatBadge");
+const courseFrameUserWelcomeText = document.getElementById("courseFrameUserWelcomeText");
 const headerCourseTimerBadge = document.getElementById("headerCourseTimerBadge");
 const headerCourseTimerValue = document.getElementById("headerCourseTimerValue");
 
@@ -113,7 +114,7 @@ const btnCloseMessageModal = document.getElementById("btnCloseMessageModal");
 const btnCancelMessageModal = document.getElementById("btnCancelMessageModal");
 const btnSubmitQuickStudentMessage = document.getElementById("btnSubmitQuickStudentMessage");
 const lblRemainingMsgBudgetCounter = document.getElementById("lblRemainingMsgBudgetCounter");
-const customQuickTextMessageInput = document.getElementById("customQuickTextMessageInput");
+let selectedQuickMessageText = "";
 
 // ==========================================================================
 // STATE MANAGEMENT CACHE ENGINE
@@ -127,6 +128,7 @@ let currentSelectedTimeframe = localStorage.getItem("user_selected_timeframe") |
 let pendingConfirmationAction = null;
 let activeMessageTargetUser = null;
 let showAllMessagesFlag = false;
+let activeBroadcastsRef = null;
 
 function toast(msg, type = "info") {
   const box = document.getElementById("toastContainer");
@@ -288,17 +290,19 @@ async function syncPersonalAccumulatedTime(seatCode) {
   });
 }
 
-function setStatusText(joined, seat = "") {
+function setStatusText(joined, seat = "", name = "") {
   if (joined) {
     userStatus.innerHTML = `<i class="bi bi-check-circle-fill"></i> Joined (Seat ${seat})`;
     userStatus.className = "status-badge active";
     seat03AccessLink.classList.remove("hidden"); 
     courseFrameUserSeatBadge.innerText = `Seat ${seat}`;
+    courseFrameUserWelcomeText.innerText = `Welcome : ${name}`;
   } else {
     userStatus.innerHTML = `<i class="bi bi-dash-circle"></i> Not joined`;
     userStatus.className = "status-badge";
     seat03AccessLink.classList.add("hidden");
     courseFrameUserSeatBadge.innerText = `Seat --`;
+    courseFrameUserWelcomeText.innerText = `Welcome : Guest`;
     closeCourseEmbedWindow();
   }
 }
@@ -376,7 +380,7 @@ async function joinRoom(name, code, pin) {
   formBox.classList.add("hidden");
   leaveBtn.classList.remove("hidden");
   pinActionBox.classList.remove("hidden");
-  setStatusText(true, normalizedCode);
+  setStatusText(true, normalizedCode, targetSeat.name);
 
   startTimer();
   syncPersonalAccumulatedTime(normalizedCode);
@@ -551,7 +555,10 @@ function listenToGlobalBroadcastAlerts() {
     }
   });
 
-  db.ref("broadcastAlerts").orderByChild("timestamp").on("value", (snap) => {
+  if (activeBroadcastsRef) activeBroadcastsRef.off();
+  
+  activeBroadcastsRef = db.ref("broadcastAlerts").orderByChild("timestamp");
+  activeBroadcastsRef.on("value", (snap) => {
     bellMessagesListContainer.innerHTML = "";
     const data = snap.val() || {};
     
@@ -588,6 +595,8 @@ function listenToGlobalBroadcastAlerts() {
       }
       actionButtons += `</div>`;
 
+      const card = document.createElement("div");
+      card.className = cardClass;
       card.innerHTML = `
         <div class="bell-msg-meta">
           <div>
@@ -657,6 +666,7 @@ btnLoadAllMessagesView.addEventListener("click", (e) => {
   e.stopPropagation();
   showAllMessagesFlag = !showAllMessagesFlag;
   btnLoadAllMessagesView.innerText = showAllMessagesFlag ? "Show Less" : "View All";
+  listenToGlobalBroadcastAlerts();
 });
 
 btnAdminBroadcastSubmit.addEventListener("click", async (e) => {
@@ -693,15 +703,11 @@ btnAdminBroadcastSubmit.addEventListener("click", async (e) => {
 });
 
 // ==========================================================================
-// SELECTION POPUP MESSAGING DRIVERS (LIMITED TO SELECTIONS WITH SEAT & NAME BADGES)
+// SELECTION POPUP MESSAGING DRIVERS
 // ==========================================================================
 window.openQuickMessagingModal = async function(targetUserId, targetSeatCode) {
   if (!currentUser) {
     toast("You must claim a space seat to interact.", "error");
-    return;
-  }
-  if (currentUser.id !== targetUserId) {
-    toast("You can only transmit alerts from your own assigned seat workspace dashboard profile.", "error");
     return;
   }
   
@@ -713,10 +719,9 @@ window.openQuickMessagingModal = async function(targetUserId, targetSeatCode) {
   const remaining = Math.max(0, 3 - currentUsed);
 
   lblRemainingMsgBudgetCounter.innerText = remaining;
-  customQuickTextMessageInput.value = "";
+  selectedQuickMessageText = "";
   
-  // Hide custom custom text boxes since communication must rely strictly on selection items
-  customQuickTextMessageInput.parentNode.style.display = "none";
+  document.querySelectorAll(".template-msg-pill").forEach(p => p.style.border = "1px solid var(--border-color)");
   
   quickStudentMessageModal.classList.remove("hidden");
 };
@@ -730,8 +735,7 @@ function closeQuickMessagingModalWindow() {
 
 document.querySelectorAll(".template-msg-pill").forEach(pill => {
   pill.addEventListener("click", () => {
-    customQuickTextMessageInput.value = pill.getAttribute("data-msg");
-    // Visually emphasize the selected box template inside layout
+    selectedQuickMessageText = pill.getAttribute("data-msg");
     document.querySelectorAll(".template-msg-pill").forEach(p => p.style.border = "1px solid var(--border-color)");
     pill.style.border = "2px solid var(--color-primary)";
   });
@@ -751,16 +755,14 @@ btnSubmitQuickStudentMessage.addEventListener("click", async () => {
     return;
   }
 
-  const msgText = customQuickTextMessageInput.value.trim();
-  if (!msgText) {
+  if (!selectedQuickMessageText) {
     toast("Please pick one of the template messages from the list first.", "warning");
     return;
   }
 
-  // Construct message payload tagged dynamically with name and seat coordinates
   const broadcastPayload = {
     title: `Status Update from ${currentUser.name} (Seat ${currentUser.code})`,
-    body: msgText,
+    body: selectedQuickMessageText,
     seatCode: currentUser.code,
     timestamp: Date.now()
   };
@@ -832,9 +834,7 @@ function renderOnlineUI() {
     div.setAttribute("data-start", u.start);
     
     const courseStatusBadge = u.inCourse ? `<span class="in-course-indicator-tag"><i class="bi bi-mortarboard-fill"></i> Signed In</span>` : '';
-    
-    // Always render message access buttons for the active current user to dispatch structural status templates
-    const messageActionBtn = (currentUser && currentUser.id === u.id) 
+    const messageActionBtn = currentUser 
       ? `<button onclick="openQuickMessagingModal('${u.id}', '${u.code}')" class="student-msg-icon-trigger" title="Send Status Alert"><i class="bi bi-envelope"></i></button>` 
       : '';
 
@@ -1124,7 +1124,7 @@ window.addEventListener("DOMContentLoaded", () => {
         formBox.classList.add("hidden");
         leaveBtn.classList.remove("hidden");
         pinActionBox.classList.remove("hidden");
-        setStatusText(true, currentUser.code);
+        setStatusText(true, currentUser.code, currentUser.name);
         startTimer();
         syncPersonalAccumulatedTime(currentUser.code);
         listenToActiveKicks(savedStudentId);
