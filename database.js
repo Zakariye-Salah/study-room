@@ -24,6 +24,11 @@ const SEATS = {
   "05": { name: "Eng Hassan", pin: "5555" }
 };
 
+// SESSION LIMITS & AUTO-KICK CONFIGURATION
+const SESSION_LIMIT = 3.5 * 60 * 60 * 1000; // Updated to 3h:30m:00s testing limit
+let autoRemovalTimeoutInstance = null;
+let courseTimerIntervalInstance = null;
+
 // ==========================================================================
 // DOM ARCHITECTURE NODES REFERENCE
 // ==========================================================================
@@ -89,6 +94,8 @@ const btnCloseCourseEmbed = document.getElementById("btnCloseCourseEmbed");
 const btnToggleFullScreen = document.getElementById("btnToggleFullScreen");
 const btnMinimizeCourse = document.getElementById("btnMinimizeCourse");
 const courseFrameUserSeatBadge = document.getElementById("courseFrameUserSeatBadge");
+const headerCourseTimerBadge = document.getElementById("headerCourseTimerBadge");
+const headerCourseTimerValue = document.getElementById("headerCourseTimerValue");
 
 const headerNotificationBellBtn = document.getElementById("headerNotificationBellBtn");
 const bellUnreadCounterBadge = document.getElementById("bellUnreadCounterBadge");
@@ -134,21 +141,27 @@ function toast(msg, type = "info") {
 // ==========================================================================
 // MODAL & DIALOG SYSTEMS IMPLEMENTATION LAYER
 // ==========================================================================
-function openConfirmationModal(title, msg, onConfirm) {
+function openConfirmationModal(title, msg, onConfirm, onCancel = null) {
   confirmModalTitle.innerHTML = `<i class="bi bi-exclamation-triangle text-danger"></i> ${title}`;
   confirmModalMessage.textContent = msg;
   pendingConfirmationAction = onConfirm;
   confirmationModalOverlay.classList.remove("hidden");
+  
+  // Clean up any old listeners or states for cancellation
+  cancelConfirmModalBtn.onclick = () => {
+    if (typeof onCancel === "function") onCancel();
+    closeConfirmationModal();
+  };
+  closeConfirmModalBtn.onclick = () => {
+    if (typeof onCancel === "function") onCancel();
+    closeConfirmationModal();
+  };
 }
 
 function closeConfirmationModal() {
   confirmationModalOverlay.classList.add("hidden");
   pendingConfirmationAction = null;
 }
-
-[cancelConfirmModalBtn, closeConfirmModalBtn].forEach(btn => {
-  btn.addEventListener("click", closeConfirmationModal);
-});
 
 acceptConfirmModalBtn.addEventListener("click", () => {
   if (typeof pendingConfirmationAction === "function") {
@@ -177,20 +190,6 @@ function getTodayIdentifier() {
 function getMonthIdentifier() {
   const d = new Date();
   return `month_${d.getFullYear()}_${d.getMonth() + 1}`;
-}
-
-function formatHoursMinutes(ms) {
-  const totalMinutes = Math.floor(ms / 60000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return `${hours}h:${minutes < 10 ? '0' : ''}${minutes}m`;
-}
-
-function formatLiveSeconds(ms) {
-  const totalSecs = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSecs / 60);
-  const secs = totalSecs % 60;
-  return `${minutes}m ${secs}s`;
 }
 
 // DROPDOWN BOX TOGGLE INTERACTIVE RUNTIME
@@ -236,9 +235,31 @@ function updateTimeframeButtonLabelText() {
   selectedTimeframeLabel.innerHTML = `<i class="bi ${iconClass}"></i> Your ${labelText}`;
 }
 
+function formatHoursMinutes(ms) {
+  const totalMinutes = Math.floor(ms / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours}h:${minutes < 10 ? '0' : ''}${minutes}m`;
+}
+
 // ==========================================================================
 // OPERATIONS LOGIC & TIMERS
 // ==========================================================================
+function formatLiveSeconds(ms) {
+  const totalSecs = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSecs / 60);
+  const secs = totalSecs % 60;
+  return `${minutes}m ${secs}s`;
+}
+
+function formatFullStopwatch(ms) {
+  const totalSecs = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSecs / 3600);
+  const minutes = Math.floor((totalSecs % 3600) / 60);
+  const secs = totalSecs % 60;
+  return `${hours.toString().padStart(2, '0')}h:${minutes.toString().padStart(2, '0')}m:${secs.toString().padStart(2, '0')}s`;
+}
+
 function startTimer() {
   clearInterval(timerInterval);
   timerInterval = setInterval(() => {
@@ -250,6 +271,7 @@ function startTimer() {
 
 function stopTimer() {
   clearInterval(timerInterval);
+  clearTimeout(autoRemovalTimeoutInstance);
   timerBox.innerText = "0m 0s";
   personalWeeklyBox.classList.add("hidden");
 }
@@ -263,11 +285,9 @@ async function syncPersonalAccumulatedTime(seatCode) {
   db.ref(path).off(); 
   db.ref(path).on("value", async (snap) => {
     let historicalMs = snap.val() || 0;
-    
     if (currentUser && currentUser.code === seatCode) {
       historicalMs += (Date.now() - currentUser.start);
     }
-    
     weeklyMinutesVal.innerText = formatHoursMinutes(historicalMs);
     personalWeeklyBox.classList.remove("hidden");
   });
@@ -367,6 +387,23 @@ async function joinRoom(name, code, pin) {
   syncPersonalAccumulatedTime(normalizedCode);
   localStorage.setItem("active_user", userId);
   listenToActiveKicks(userId);
+
+  // TRIGGER THE SECURITY AUTOMATIC 03h:30m:00s KICK-OUT TIMEOUT
+  clearTimeout(autoRemovalTimeoutInstance);
+  autoRemovalTimeoutInstance = setTimeout(() => {
+    console.log("User active for too long. Triggering professional auto-kick dialog...");
+    
+    openConfirmationModal(
+      "Session Expired", 
+      "Your 03h:30m:00s room session has expired. Click OK to logout or Leave the room completely.",
+      () => {
+        leaveRoom(true);
+      },
+      () => {
+        leaveRoom(true);
+      }
+    );
+  }, SESSION_LIMIT);
 }
 
 async function leaveRoom(auto = false) {
@@ -401,7 +438,7 @@ async function leaveRoom(auto = false) {
     time: Date.now()
   });
 
-  toast(auto ? "Session terminated by admin" : "Left room successfully", "info");
+  toast(auto ? "Session terminated automatically" : "Left room successfully", "info");
   localStorage.removeItem("active_user");
 }
 
@@ -438,12 +475,26 @@ async function openCourseEmbedWindow() {
   courseIframeElement.src = "https://dugsiiye.com/dashboard/student";
   courseEmbedContainer.classList.remove("hidden");
   document.body.style.overflow = "hidden";
+
+  // Trigger professional dynamic course tracking stopwatch layout in main header
+  headerCourseTimerBadge.classList.remove("hidden");
+  const courseTimeStartStamp = Date.now();
+  headerCourseTimerValue.innerText = "00h:00m:00s";
+  
+  clearInterval(courseTimerIntervalInstance);
+  courseTimerIntervalInstance = setInterval(() => {
+    const totalSpentInCourse = Date.now() - courseTimeStartStamp;
+    headerCourseTimerValue.innerText = formatFullStopwatch(totalSpentInCourse);
+  }, 1000);
 }
 
 async function closeCourseEmbedWindow() {
   courseEmbedContainer.classList.add("hidden");
   courseIframeElement.src = "";
   document.body.style.overflow = "";
+  headerCourseTimerBadge.classList.add("hidden");
+  clearInterval(courseTimerIntervalInstance);
+
   if (document.fullscreenElement) {
     document.exitFullscreen().catch(() => {});
   }
@@ -472,7 +523,7 @@ btnToggleFullScreen.addEventListener("click", () => {
 });
 
 // ==========================================================================
-// DYNAMIC BROADCAST SYSTEM & BELL SYSTEMS ENGINE (WITH ACTION SEPARATIONS)
+// DYNAMIC BROADCAST SYSTEM & BELL SYSTEMS ENGINE
 // ==========================================================================
 headerNotificationBellBtn.addEventListener("click", (e) => {
   e.stopPropagation();
@@ -486,7 +537,8 @@ headerNotificationBellBtn.addEventListener("click", (e) => {
   }
 });
 
-btnToggleAdminComposer.addEventListener("click", () => {
+btnToggleAdminComposer.addEventListener("click", (e) => {
+  e.stopPropagation(); 
   adminMessageComposerArea.classList.toggle("expanded");
   const isExpanded = adminMessageComposerArea.classList.contains("expanded");
   btnToggleAdminComposer.innerHTML = isExpanded ? `<i class="bi bi-dash-circle"></i>` : `<i class="bi bi-plus-circle"></i>`;
@@ -531,16 +583,14 @@ function listenToGlobalBroadcastAlerts() {
       const isMsgFromAdmin = m.seatCode === "Admin";
       
       let actionButtons = `<div class="bell-msg-actions">`;
-      
       if (isAdminAuthenticated) {
         if (isMsgFromAdmin) {
-          actionButtons += `<a href="javascript:void(0)" onclick="editMessage('${m.id}', '${escapeHtml(m.title)}', '${escapeHtml(m.body)}')" class="text-warning" title="Edit"><i class="bi bi-pencil-square"></i></a>`;
+          actionButtons += `<a href="javascript:void(0)" onclick="editMessage(event, '${m.id}', '${escapeHtml(m.title)}', '${escapeHtml(m.body)}')" class="text-warning" title="Edit"><i class="bi bi-pencil-square"></i></a>`;
         }
-        actionButtons += `<a href="javascript:void(0)" onclick="deleteMessage('${m.id}')" class="text-danger" style="color:var(--color-danger) !important;" title="Delete"><i class="bi bi-trash"></i></a>`;
+        actionButtons += `<a href="javascript:void(0)" onclick="deleteMessage(event, '${m.id}')" class="text-danger" style="color:var(--color-danger) !important;" title="Delete"><i class="bi bi-trash"></i></a>`;
       } else if (isOwnMessage) {
-        actionButtons += `<a href="javascript:void(0)" onclick="deleteMessage('${m.id}')" class="text-danger" style="color:var(--color-danger) !important;" title="Delete"><i class="bi bi-trash"></i></a>`;
+        actionButtons += `<a href="javascript:void(0)" onclick="deleteMessage(event, '${m.id}')" class="text-danger" style="color:var(--color-danger) !important;" title="Delete"><i class="bi bi-trash"></i></a>`;
       }
-      
       actionButtons += `</div>`;
 
       card.innerHTML = `
@@ -559,7 +609,8 @@ function listenToGlobalBroadcastAlerts() {
   });
 }
 
-window.deleteMessage = function(messageId) {
+window.deleteMessage = function(e, messageId) {
+  if (e) e.stopPropagation();
   openConfirmationModal(
     "Delete Alert Message",
     "Are you sure you want to completely delete this message broadcast alert?",
@@ -570,17 +621,19 @@ window.deleteMessage = function(messageId) {
   );
 };
 
-window.editMessage = function(messageId, currentTitle, currentBody) {
+window.editMessage = function(e, messageId, currentTitle, currentBody) {
+  if (e) e.stopPropagation();
   if (!isAdminAuthenticated) return;
   adminMsgTitleInput.value = currentTitle;
   adminMsgBodyInput.value = currentBody;
   
   if (!adminMessageComposerArea.classList.contains("expanded")) {
-    btnToggleAdminComposer.click();
+    adminMessageComposerArea.classList.add("expanded");
+    btnToggleAdminComposer.innerHTML = `<i class="bi bi-dash-circle"></i>`;
   }
   
-  btnAdminBroadcastSubmit.onerror = btnAdminBroadcastSubmit.onclick; 
-  btnAdminBroadcastSubmit.onclick = async () => {
+  btnAdminBroadcastSubmit.onclick = async (evt) => {
+    if (evt) evt.stopPropagation();
     const updatedTitle = adminMsgTitleInput.value.trim();
     const updatedBody = adminMsgBodyInput.value.trim();
     
@@ -597,10 +650,7 @@ window.editMessage = function(messageId, currentTitle, currentBody) {
 
     adminMsgTitleInput.value = "";
     adminMsgBodyInput.value = "";
-    btnToggleAdminComposer.click();
     toast("Broadcast alert updated successfully!", "success");
-    
-    btnAdminBroadcastSubmit.onclick = btnAdminBroadcastSubmit.onerror; 
   };
   
   toast("Message loaded into composer context for editing.", "info");
@@ -610,12 +660,14 @@ function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
-btnLoadAllMessagesView.addEventListener("click", () => {
+btnLoadAllMessagesView.addEventListener("click", (e) => {
+  e.stopPropagation();
   showAllMessagesFlag = !showAllMessagesFlag;
   btnLoadAllMessagesView.innerText = showAllMessagesFlag ? "Show Less" : "View All";
 });
 
-btnAdminBroadcastSubmit.addEventListener("click", async () => {
+btnAdminBroadcastSubmit.addEventListener("click", async (e) => {
+  e.stopPropagation();
   if (!isAdminAuthenticated) return;
   const title = adminMsgTitleInput.value.trim();
   const body = adminMsgBodyInput.value.trim();
@@ -644,7 +696,7 @@ btnAdminBroadcastSubmit.addEventListener("click", async () => {
 
   adminMsgTitleInput.value = "";
   adminMsgBodyInput.value = "";
-  btnToggleAdminComposer.click();
+  
   toast("Broadcast alert transmitted successfully!", "success");
 });
 
@@ -860,9 +912,19 @@ leaveBtn.addEventListener("click", () => {
 // ==========================================================================
 // ADMINISTRATIVE PRIVILEGE DASHBOARD METRICS
 // ==========================================================================
+function scrollDownToAdminSection() {
+  const targetBox = isAdminAuthenticated ? adminPanel : adminAuthBox;
+  if (targetBox) {
+    targetBox.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }
+}
+
 adminToggleBtn.addEventListener("click", () => {
-  adminAuthBox.classList.remove("hidden");
-  formBox.classList.add("hidden");
+  if (!isAdminAuthenticated) {
+    adminAuthBox.classList.remove("hidden");
+    formBox.classList.add("hidden");
+  }
+  setTimeout(scrollDownToAdminSection, 150);
 });
 
 adminCancelBtn.addEventListener("click", () => {
@@ -932,6 +994,7 @@ adminLoginBtn.addEventListener("click", async () => {
       adminPanel.classList.remove("hidden");
       btnToggleAdminComposer.classList.remove("hidden"); 
       syncAdminDashboardMetrics();
+      setTimeout(scrollDownToAdminSection, 150);
     } else {
       toast("Unauthorized account context profile detected.", "error");
       firebase.auth().signOut();
