@@ -26,7 +26,7 @@
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.05);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
   --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 10px 10px -5px rgba(0, 0, 0, 0.03);
-  --glass-bg: rgba(255, 255, 255, 0.8);
+  --glass-bg: rgba(255, 255, 255, 0.85);
   --glass-border: rgba(226, 232, 240, 0.8);
   --radius: 14px;
   --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -40,7 +40,7 @@
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
   
-  --glass-bg: rgba(19, 28, 46, 0.8);
+  --glass-bg: rgba(19, 28, 46, 0.85);
   --glass-border: rgba(38, 51, 77, 0.8);
   --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
@@ -57,7 +57,7 @@ body {
   color: var(--text-primary);
   font-family: var(--font-family);
   min-height: 100vh;
-  padding: 24px;
+  padding: 100px 24px 24px 24px; /* Added 100px top padding to offset the fixed header container */
   transition: var(--transition-smooth);
 }
 
@@ -72,32 +72,45 @@ body {
   gap: 20px;
 }
 
+/* UPGRADED FIXED / STICKY GLASSMORPHIC NAVBAR LAYERS */
 .main-header {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 48px);
+  max-width: 1300px;
   background: var(--glass-bg);
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--glass-border);
-  padding: 18px 24px;
+  padding: 14px 24px;
   border-radius: var(--radius);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
+  z-index: 4000; /* Stays below fullscreen modal but above standard app widgets */
+  flex-wrap: nowrap;
+  transition: var(--transition-smooth);
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 14px;
+  flex-shrink: 1;
 }
 
 .brand h1 {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 800;
   letter-spacing: -0.5px;
+  line-height: 1.2;
 }
 
 .brand p {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
 
@@ -105,12 +118,352 @@ body {
   font-size: 26px;
   color: var(--color-primary);
   animation: float 4s ease-in-out infinite;
+  flex-shrink: 0;
 }
 
 .header-actions {
   display: flex;
   align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* MOBILE RESPONSIVE OPTIMIZATIONS PREVENTING CRUSHING / SQUEEZING */
+@media (max-width: 600px) {
+  body { 
+    padding: 90px 12px 12px 12px; 
+  }
+  .main-header {
+    top: 8px;
+    width: calc(100% - 24px);
+    padding: 12px;
+    gap: 8px;
+  }
+  .brand-text-wrapper { display: block; }
+  .brand h1 { font-size: 15px; }
+  .brand p { font-size: 10px; }
+  .brand-icon { font-size: 20px; gap: 8px; }
+  .premium-btn { padding: 6px 10px; font-size: 11px; }
+  .icon-btn { width: 34px; height: 34px; font-size: 14px; }
+}
+
+/* ==========================================================================
+   UPGRADED EMBED IFRAME FRAME WORKPLACE OVERLAYS
+   ========================================================================== */
+.course-embed-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(11, 15, 25, 0.85);
+  backdrop-filter: blur(14px);
+  z-index: 5500; /* Placed explicitly higher than fixed navbar */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 15px;
+}
+
+.course-window-frame {
+  width: 100%;
+  height: 100%;
+  max-width: 1200px;
+  max-height: 850px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: max-width 0.3s ease, max-height 0.3s ease;
+}
+
+.course-window-frame:fullscreen {
+  max-width: 100% !important;
+  max-height: 100% !important;
+  border-radius: 0;
+}
+
+.course-frame-header {
+  padding: 14px 20px;
+  background: var(--bg-surface-elevated);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.course-brand {
+  display: flex;
+  align-items: center;
   gap: 12px;
+}
+
+.brand-title-text {
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.frame-seat-badge {
+  font-size: 11px;
+  background: var(--color-primary);
+  color: #ffffff;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 700;
+  margin-left: 6px;
+}
+
+.course-frame-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.frame-control-btn {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: var(--transition-smooth);
+}
+
+.frame-control-btn:hover {
+  background: var(--border-color);
+}
+
+.frame-control-btn.close-x-btn {
+  background: var(--color-danger);
+  color: #ffffff;
+  border: none;
+}
+
+.frame-control-btn.close-x-btn:hover {
+  background: var(--color-danger-hover);
+}
+
+.course-frame-body-wrapper {
+  flex-grow: 1;
+  width: 100%;
+  position: relative;
+  background: #000;
+}
+
+#courseIframeElement {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: var(--bg-surface);
+}
+
+/* ==========================================================================
+   BELL NOTIFICATION DROPDOWN SYSTEM
+   ========================================================================== */
+.bell-dropdown-wrapper {
+  position: relative;
+}
+
+.bell-counter-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: var(--color-danger);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 900;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--bg-surface);
+}
+
+.bell-dropdown-panel {
+  position: absolute;
+  top: calc(100% + 14px);
+  right: 0;
+  width: 340px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  z-index: 4100;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: dropMenuDown 0.25s ease-out;
+}
+
+.bell-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 8px;
+}
+
+.bell-panel-header h3 {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.view-all-msg-btn {
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.bell-messages-list {
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bell-msg-item {
+  background: var(--bg-surface-elevated);
+  padding: 10px;
+  border-radius: 8px;
+  border-left: 3px solid var(--color-primary);
+}
+
+.bell-msg-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.bell-msg-sender {
+  font-weight: 700;
+  color: var(--color-warning);
+}
+
+.bell-msg-title {
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.bell-msg-body {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.empty-bell-fallback {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 20px 0;
+}
+
+/* ADMIN COMPOSER BOX UTILITIES */
+.admin-composer-box {
+  background: var(--bg-surface-elevated);
+  border: 1px dashed var(--color-warning);
+  padding: 10px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin-composer-box h4 {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--color-warning);
+}
+
+.admin-composer-box input, .admin-composer-box textarea {
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  outline: none;
+}
+
+/* ==========================================================================
+   QUICK MESSAGING TEMPLATES ENGINE
+   ========================================================================== */
+.message-templates-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.template-msg-pill {
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-color);
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: center;
+  transition: var(--transition-smooth);
+}
+
+.template-msg-pill:hover {
+  background: var(--color-primary);
+  color: #ffffff;
+  border-color: var(--color-primary);
+}
+
+.student-msg-icon-trigger {
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  transition: transform 0.2s ease;
+}
+
+.student-msg-icon-trigger:hover {
+  transform: scale(1.15);
+}
+
+.in-course-indicator-tag {
+  font-size: 10px;
+  background: #d1fae5;
+  color: #065f46;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-weight: 700;
+  margin-left: 6px;
+  border: 1px solid #a7f3d0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+[data-theme="dark"] .in-course-indicator-tag {
+  background: rgba(6, 95, 70, 0.3);
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.4);
 }
 
 /* ==========================================================================
@@ -165,7 +518,7 @@ body {
 .enter-course-btn {
   background: #ffffff;
   color: #1e3a8a;
-  text-decoration: none;
+  border: none;
   padding: 10px 20px;
   border-radius: 8px;
   font-weight: 700;
@@ -173,6 +526,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  cursor: pointer;
   transition: var(--transition-smooth);
 }
 
@@ -244,7 +598,6 @@ body {
   color: var(--color-primary);
 }
 
-/* PERSISTENT TIMEFRAME DROPDOWN ENGINE */
 .timeframe-dropdown-wrapper {
   position: relative;
   width: 100%;
@@ -548,6 +901,9 @@ input:focus {
 .user-card .name {
   font-weight: 700;
   font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .live-elapsed-badge {
@@ -641,7 +997,7 @@ input:focus {
   height: 100%;
   background: rgba(15, 23, 42, 0.4);
   backdrop-filter: blur(8px);
-  z-index: 1000;
+  z-index: 5000; /* Keeps confirmation layer correctly over sticky components */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -797,4 +1153,8 @@ input:focus {
 .compact-btn {
   width: auto !important;
   padding: 6px 12px !important;
+}
+
+.admin-dashboard-panel {
+  margin-top: 15px;
 }
