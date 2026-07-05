@@ -16,6 +16,35 @@
 
   <div id="toastContainer"></div>
 
+  <!-- MAIN EMBED COURSE WINDOW VIEWPORT CONTAINER -->
+  <div id="courseEmbedContainer" class="course-embed-overlay hidden">
+    <div class="course-window-frame">
+      <header class="course-frame-header">
+        <div class="course-brand">
+          <i class="bi bi-book brand-icon"></i>
+          <div>
+            <h2 class="brand-title-text">Study Room Pro</h2>
+            <span id="courseFrameUserSeatBadge" class="frame-seat-badge">Seat --</span>
+          </div>
+        </div>
+        <div class="course-frame-controls">
+          <button id="btnToggleFullScreen" class="frame-control-btn" title="Toggle Fullscreen">
+            <i class="bi bi-arrows-fullscreen"></i>
+          </button>
+          <button id="btnMinimizeCourse" class="frame-control-btn" title="Minimize Window">
+            <i class="bi bi-dash-lg"></i>
+          </button>
+          <button id="btnCloseCourseEmbed" class="frame-control-btn close-x-btn" title="Close Course">
+            <i class="bi bi-x-lg"></i>
+          </button>
+        </div>
+      </header>
+      <div class="course-frame-body-wrapper">
+        <iframe id="courseIframeElement" src="" allowfullscreen></iframe>
+      </div>
+    </div>
+  </div>
+
   <!-- MAIN CONTAINER -->
   <div class="app-container">
     
@@ -23,12 +52,41 @@
     <header class="main-header">
       <div class="brand">
         <i class="bi bi-book brand-icon"></i>
-        <div>
+        <div class="brand-text-wrapper">
           <h1>Study Room Pro</h1>
           <p>Secure Learning System</p>
         </div>
       </div>
       <div class="header-actions">
+        <!-- NOTIFICATION BELL ACCORDION LAYER -->
+        <div class="bell-dropdown-wrapper">
+          <button id="headerNotificationBellBtn" class="icon-btn position-relative" title="Notifications">
+            <i class="bi bi-bell"></i>
+            <span id="bellUnreadCounterBadge" class="bell-counter-badge hidden">0</span>
+          </button>
+          
+          <div id="bellNotificationsDropdownPanel" class="bell-dropdown-panel hidden">
+            <div class="bell-panel-header">
+              <h3><i class="bi bi-bell-fill"></i> System Broadcasts</h3>
+              <button id="btnLoadAllMessagesView" class="view-all-msg-btn">View All</button>
+            </div>
+            
+            <!-- ADMIN MESSAGE COMPOSER CONTAINER -->
+            <div id="adminMessageComposerArea" class="admin-composer-box hidden">
+              <h4>Compose Live Alert</h4>
+              <input type="text" id="adminMsgTitleInput" placeholder="Alert Title Title...">
+              <textarea id="adminMsgBodyInput" rows="2" placeholder="Type your broadcast message details here..."></textarea>
+              <button id="btnAdminBroadcastSubmit" class="action-btn safety-btn compact-btn">
+                <i class="bi bi-send"></i> Broadcast Alert
+              </button>
+            </div>
+
+            <div id="bellMessagesListContainer" class="bell-messages-list">
+              <!-- Dynamically loaded messages inject here -->
+            </div>
+          </div>
+        </div>
+
         <button id="themeToggleBtn" class="icon-btn" title="Toggle Theme">
           <i id="sunIcon" class="bi bi-sun hidden"></i>
           <i id="moonIcon" class="bi bi-moon-stars"></i>
@@ -53,7 +111,7 @@
           <h3>Full Stack AI Engineer</h3>
         </div>
       </div>
-      <a href="https://dugsiiye.com/dashboard/student" class="enter-course-btn">Enter Course <i class="bi bi-arrow-right"></i></a>
+      <button id="btnTriggerEnterCourseEmbed" class="enter-course-btn">Enter Course <i class="bi bi-arrow-right"></i></button>
     </div>
 
     <!-- MAIN GRID LAYOUT -->
@@ -169,6 +227,35 @@
           <h2 class="section-title"><span class="live-dot"></span> Online Students Dashboard</h2>
           <div id="usersList" class="students-list-grid">
             <!-- Render Dynamic Live Users Inside Workspace -->
+          </div>
+        </div>
+
+        <!-- POPUP INTERACTIVE QUICK MESSAGING MODAL UTILITY -->
+        <div id="quickStudentMessageModal" class="modal-blur-overlay hidden">
+          <div class="modal-window scale-animation">
+            <div class="modal-header">
+              <h3><i class="bi bi-chat-dots-fill text-primary"></i> Send Quick Message</h3>
+              <button id="btnCloseMessageModal" class="modal-close-x">&times;</button>
+            </div>
+            <div class="modal-body">
+              <p style="margin-bottom: 12px;">Remaining Daily Message Budget: <strong id="lblRemainingMsgBudgetCounter">3</strong>/3</p>
+              
+              <div class="message-templates-grid">
+                <button class="template-msg-pill" data-msg="I am waiting outside the room.">I am waiting</button>
+                <button class="template-msg-pill" data-msg="Please assist me with this lesson problem block.">Need help</button>
+                <button class="template-msg-pill" data-msg="Taking a brief 5 minute drink break.">Break time</button>
+                <button class="template-msg-pill" data-msg="Finished with my assignment milestones!">Task done</button>
+              </div>
+
+              <div class="input-group" style="margin-top: 15px;">
+                <i class="bi bi-pencil-square input-icon"></i>
+                <input type="text" id="customQuickTextMessageInput" placeholder="Or type a custom message content here...">
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button id="btnCancelMessageModal" class="action-btn neutral-btn">Cancel</button>
+              <button id="btnSubmitQuickStudentMessage" class="action-btn primary-btn">Send Alert</button>
+            </div>
           </div>
         </div>
 
