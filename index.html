@@ -57,6 +57,12 @@
           <p>Secure Learning System</p>
         </div>
       </div>
+      
+      <!-- LIVE TRACKING STOPWATCH FOR THE OPEN COURSE FRAME -->
+      <div id="headerCourseTimerBadge" class="course-live-badge hidden">
+        <i class="bi bi-stopwatch-fill text-primary"></i> Course Session: <span id="headerCourseTimerValue">00h:00m:00s</span>
+      </div>
+
       <div class="header-actions">
         <!-- NOTIFICATION BELL DROPDOWN -->
         <div class="bell-dropdown-wrapper">
@@ -305,7 +311,7 @@
     </div>
   </div>
 
-  <!-- CONFIRMATION MODAL OVERLAY -->
+  <!-- CONFIRMATION MODAL OVERLAY (USED FOR SESSION EXPIRATION & SYSTEM CONFIRMATIONS) -->
   <div id="confirmationModalOverlay" class="modal-blur-overlay hidden">
     <div class="modal-window scale-animation warning-border">
       <div class="modal-header">
@@ -316,8 +322,8 @@
         <p id="confirmModalMessage">Are you sure you wish to perform this execution action?</p>
       </div>
       <div class="modal-footer">
-        <button id="cancelConfirmModalBtn" class="action-btn neutral-btn">No, Go Back</button>
-        <button id="acceptConfirmModalBtn" class="action-btn danger-btn">Yes, Proceed</button>
+        <button id="cancelConfirmModalBtn" class="action-btn neutral-btn">Cancel</button>
+        <button id="acceptConfirmModalBtn" class="action-btn danger-btn">OK</button>
       </div>
     </div>
   </div>
