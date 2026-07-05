@@ -22,9 +22,14 @@
       <header class="course-frame-header">
         <div class="course-brand">
           <i class="bi bi-book brand-icon"></i>
-          <div>
+          <div class="course-header-user-details">
             <h2 class="brand-title-text">Study Room Pro</h2>
+            <span id="courseFrameUserWelcomeText" class="welcome-user-text">Welcome : Guest</span>
             <span id="courseFrameUserSeatBadge" class="frame-seat-badge">Seat --</span>
+            <!-- MOVE TO COURSE FRAME HEADER NEXT TO SEAT BADGE AS SHOWN IN image_0f435e.png -->
+            <div id="headerCourseTimerBadge" class="course-live-badge hidden">
+              <i class="bi bi-stopwatch-fill text-primary"></i> Session: <span id="headerCourseTimerValue">00h:00m:00s</span>
+            </div>
           </div>
         </div>
         <div class="course-frame-controls">
@@ -56,11 +61,6 @@
           <h1>Study Room Pro</h1>
           <p>Secure Learning System</p>
         </div>
-      </div>
-      
-      <!-- LIVE TRACKING STOPWATCH FOR THE OPEN COURSE FRAME -->
-      <div id="headerCourseTimerBadge" class="course-live-badge hidden">
-        <i class="bi bi-stopwatch-fill text-primary"></i> Course Session: <span id="headerCourseTimerValue">00h:00m:00s</span>
       </div>
 
       <div class="header-actions">
@@ -245,22 +245,17 @@
         <div id="quickStudentMessageModal" class="modal-blur-overlay hidden">
           <div class="modal-window scale-animation">
             <div class="modal-header">
-              <h3><i class="bi bi-chat-dots-fill text-primary"></i> Send Quick Message</h3>
+              <h3><i class="bi bi-chat-dots-fill text-primary"></i> Send Quick Status Alert</h3>
               <button id="btnCloseMessageModal" class="modal-close-x">&times;</button>
             </div>
             <div class="modal-body">
-              <p style="margin-bottom: 12px;">Remaining Daily Message Budget: <strong id="lblRemainingMsgBudgetCounter">3</strong>/3</p>
+              <p style="margin-bottom: 15px;">Remaining Daily Message Allowance: <strong id="lblRemainingMsgBudgetCounter">3</strong>/3</p>
               
-              <div class="message-templates-grid">
-                <button class="template-msg-pill" data-msg="I am waiting outside the room.">I am waiting</button>
-                <button class="template-msg-pill" data-msg="Please assist me with this lesson problem block.">Need help</button>
-                <button class="template-msg-pill" data-msg="Taking a brief 5 minute drink break.">Break time</button>
+              <div class="message-templates-grid-full">
+                <button class="template-msg-pill" data-msg="I am waiting outside the course room.">I am waiting</button>
+                <button class="template-msg-pill" data-msg="Please assist me with this lesson code problem block.">Need help</button>
+                <button class="template-msg-pill" data-msg="Taking a brief study break right now.">Break time</button>
                 <button class="template-msg-pill" data-msg="Finished with my assignment milestones!">Task done</button>
-              </div>
-
-              <div class="input-group" style="margin-top: 15px;">
-                <i class="bi bi-pencil-square input-icon"></i>
-                <input type="text" id="customQuickTextMessageInput" placeholder="Or type a custom message content here...">
               </div>
             </div>
             <div class="modal-footer">
@@ -311,7 +306,7 @@
     </div>
   </div>
 
-  <!-- CONFIRMATION MODAL OVERLAY (USED FOR SESSION EXPIRATION & SYSTEM CONFIRMATIONS) -->
+  <!-- CONFIRMATION MODAL OVERLAY -->
   <div id="confirmationModalOverlay" class="modal-blur-overlay hidden">
     <div class="modal-window scale-animation warning-border">
       <div class="modal-header">
@@ -328,7 +323,6 @@
     </div>
   </div>
 
-  <!-- APPLICATION LOGIC TARGET FILE LINK -->
   <script src="database.js"></script>
 </body>
 </html>
