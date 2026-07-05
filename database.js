@@ -25,7 +25,7 @@ const SEATS = {
 };
 
 // SESSION LIMITS & AUTO-KICK CONFIGURATION
-const SESSION_LIMIT = 3.5 * 60 * 60 * 1000; // Updated to 3h:30m:00s testing limit
+const SESSION_LIMIT = 3.5 * 60 * 60 * 1000; 
 let autoRemovalTimeoutInstance = null;
 let courseTimerIntervalInstance = null;
 
@@ -147,7 +147,6 @@ function openConfirmationModal(title, msg, onConfirm, onCancel = null) {
   pendingConfirmationAction = onConfirm;
   confirmationModalOverlay.classList.remove("hidden");
   
-  // Clean up any old listeners or states for cancellation
   cancelConfirmModalBtn.onclick = () => {
     if (typeof onCancel === "function") onCancel();
     closeConfirmationModal();
@@ -192,7 +191,6 @@ function getMonthIdentifier() {
   return `month_${d.getFullYear()}_${d.getMonth() + 1}`;
 }
 
-// DROPDOWN BOX TOGGLE INTERACTIVE RUNTIME
 timeframeDropdownBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   const isHidden = timeframeDropdownMenu.classList.contains("hidden");
@@ -242,9 +240,6 @@ function formatHoursMinutes(ms) {
   return `${hours}h:${minutes < 10 ? '0' : ''}${minutes}m`;
 }
 
-// ==========================================================================
-// OPERATIONS LOGIC & TIMERS
-// ==========================================================================
 function formatLiveSeconds(ms) {
   const totalSecs = Math.floor(ms / 1000);
   const minutes = Math.floor(totalSecs / 60);
@@ -388,20 +383,13 @@ async function joinRoom(name, code, pin) {
   localStorage.setItem("active_user", userId);
   listenToActiveKicks(userId);
 
-  // TRIGGER THE SECURITY AUTOMATIC 03h:30m:00s KICK-OUT TIMEOUT
   clearTimeout(autoRemovalTimeoutInstance);
   autoRemovalTimeoutInstance = setTimeout(() => {
-    console.log("User active for too long. Triggering professional auto-kick dialog...");
-    
     openConfirmationModal(
       "Session Expired", 
       "Your 03h:30m:00s room session has expired. Click OK to logout or Leave the room completely.",
-      () => {
-        leaveRoom(true);
-      },
-      () => {
-        leaveRoom(true);
-      }
+      () => { leaveRoom(true); },
+      () => { leaveRoom(true); }
     );
   }, SESSION_LIMIT);
 }
@@ -451,21 +439,28 @@ function listenToActiveKicks(userId) {
 }
 
 // ==========================================================================
-// EMBEDDED IFRAME COURSE CONTAINER MANAGEMENT ENGINE
+// EMBEDDED IFRAME COURSE ACCESS DYNAMIC BLOCKS
 // ==========================================================================
 async function openCourseEmbedWindow() {
   if (!currentUser) return;
   
   const snap = await db.ref("onlineUsers").get();
+  let currentOccupantName = "";
+  let currentOccupantSeat = "";
   let courseOccupied = false;
+  
   if (snap.exists()) {
     Object.values(snap.val()).forEach(u => {
-      if (u.inCourse && u.id !== currentUser.id) courseOccupied = true;
+      if (u.inCourse && u.id !== currentUser.id) {
+        courseOccupied = true;
+        currentOccupantName = u.name;
+        currentOccupantSeat = u.code;
+      }
     });
   }
 
   if (courseOccupied) {
-    toast("Course access is limited to 1 user concurrently across rooms.", "error");
+    toast(`Course access is limited to 1 user concurrently across rooms. Active User: ${currentOccupantName} (Seat ${currentOccupantSeat})`, "error");
     return;
   }
 
@@ -476,7 +471,6 @@ async function openCourseEmbedWindow() {
   courseEmbedContainer.classList.remove("hidden");
   document.body.style.overflow = "hidden";
 
-  // Trigger professional dynamic course tracking stopwatch layout in main header
   headerCourseTimerBadge.classList.remove("hidden");
   const courseTimeStartStamp = Date.now();
   headerCourseTimerValue.innerText = "00h:00m:00s";
@@ -523,7 +517,7 @@ btnToggleFullScreen.addEventListener("click", () => {
 });
 
 // ==========================================================================
-// DYNAMIC BROADCAST SYSTEM & BELL SYSTEMS ENGINE
+// DYNAMIC BROADCAST ALERT SYSTEM ENGINE
 // ==========================================================================
 headerNotificationBellBtn.addEventListener("click", (e) => {
   e.stopPropagation();
@@ -576,11 +570,12 @@ function listenToGlobalBroadcastAlerts() {
     }
 
     entries.forEach(m => {
-      const card = document.createElement("div");
-      card.className = m.seatCode === "Admin" ? "bell-msg-item warning-border" : "bell-msg-item";
-      
       const isOwnMessage = currentUser && currentUser.code === m.seatCode;
       const isMsgFromAdmin = m.seatCode === "Admin";
+      
+      let cardClass = "bell-msg-item";
+      if (isMsgFromAdmin) cardClass += " warning-border";
+      else cardClass += " student-broadcast";
       
       let actionButtons = `<div class="bell-msg-actions">`;
       if (isAdminAuthenticated) {
@@ -652,8 +647,6 @@ window.editMessage = function(e, messageId, currentTitle, currentBody) {
     adminMsgBodyInput.value = "";
     toast("Broadcast alert updated successfully!", "success");
   };
-  
-  toast("Message loaded into composer context for editing.", "info");
 };
 
 function escapeHtml(str) {
@@ -696,12 +689,11 @@ btnAdminBroadcastSubmit.addEventListener("click", async (e) => {
 
   adminMsgTitleInput.value = "";
   adminMsgBodyInput.value = "";
-  
   toast("Broadcast alert transmitted successfully!", "success");
 });
 
 // ==========================================================================
-// STUDENT QUICK TEMPLATE MESSAGING SYSTEM CONTROLLERS
+// SELECTION POPUP MESSAGING DRIVERS (LIMITED TO SELECTIONS WITH SEAT & NAME BADGES)
 // ==========================================================================
 window.openQuickMessagingModal = async function(targetUserId, targetSeatCode) {
   if (!currentUser) {
@@ -722,6 +714,10 @@ window.openQuickMessagingModal = async function(targetUserId, targetSeatCode) {
 
   lblRemainingMsgBudgetCounter.innerText = remaining;
   customQuickTextMessageInput.value = "";
+  
+  // Hide custom custom text boxes since communication must rely strictly on selection items
+  customQuickTextMessageInput.parentNode.style.display = "none";
+  
   quickStudentMessageModal.classList.remove("hidden");
 };
 
@@ -735,6 +731,9 @@ function closeQuickMessagingModalWindow() {
 document.querySelectorAll(".template-msg-pill").forEach(pill => {
   pill.addEventListener("click", () => {
     customQuickTextMessageInput.value = pill.getAttribute("data-msg");
+    // Visually emphasize the selected box template inside layout
+    document.querySelectorAll(".template-msg-pill").forEach(p => p.style.border = "1px solid var(--border-color)");
+    pill.style.border = "2px solid var(--color-primary)";
   });
 });
 
@@ -754,12 +753,13 @@ btnSubmitQuickStudentMessage.addEventListener("click", async () => {
 
   const msgText = customQuickTextMessageInput.value.trim();
   if (!msgText) {
-    toast("Please pick or type a message content snippet first", "warning");
+    toast("Please pick one of the template messages from the list first.", "warning");
     return;
   }
 
+  // Construct message payload tagged dynamically with name and seat coordinates
   const broadcastPayload = {
-    title: `${currentUser.name} Status Alert`,
+    title: `Status Update from ${currentUser.name} (Seat ${currentUser.code})`,
     body: msgText,
     seatCode: currentUser.code,
     timestamp: Date.now()
@@ -832,6 +832,8 @@ function renderOnlineUI() {
     div.setAttribute("data-start", u.start);
     
     const courseStatusBadge = u.inCourse ? `<span class="in-course-indicator-tag"><i class="bi bi-mortarboard-fill"></i> Signed In</span>` : '';
+    
+    // Always render message access buttons for the active current user to dispatch structural status templates
     const messageActionBtn = (currentUser && currentUser.id === u.id) 
       ? `<button onclick="openQuickMessagingModal('${u.id}', '${u.code}')" class="student-msg-icon-trigger" title="Send Status Alert"><i class="bi bi-envelope"></i></button>` 
       : '';
@@ -1104,7 +1106,6 @@ window.addEventListener("DOMContentLoaded", () => {
     rememberMe.checked = true;
   }
 
-  // Persistent Admin/Student State Authentication Refresh Guard
   firebase.auth().onAuthStateChanged(async (user) => {
     if (user && user.uid === "trlabHsJKARs1Emga5dQEN7SfKS2") {
       isAdminAuthenticated = true;
@@ -1115,7 +1116,6 @@ window.addEventListener("DOMContentLoaded", () => {
       syncAdminDashboardMetrics();
     }
     
-    // Sync active student profile logic cleanly
     const savedStudentId = localStorage.getItem("active_user");
     if (savedStudentId) {
       const snap = await db.ref("onlineUsers/" + savedStudentId).get();
