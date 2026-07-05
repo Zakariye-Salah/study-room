@@ -58,9 +58,9 @@
         </div>
       </div>
       <div class="header-actions">
-        <!-- NOTIFICATION BELL ACCORDION LAYER -->
+        <!-- NOTIFICATION BELL DROPDOWN -->
         <div class="bell-dropdown-wrapper">
-          <button id="headerNotificationBellBtn" class="icon-btn position-relative" title="Notifications">
+          <button id="headerNotificationBellBtn" class="icon-btn" title="Notifications">
             <i class="bi bi-bell"></i>
             <span id="bellUnreadCounterBadge" class="bell-counter-badge hidden">0</span>
           </button>
@@ -68,14 +68,19 @@
           <div id="bellNotificationsDropdownPanel" class="bell-dropdown-panel hidden">
             <div class="bell-panel-header">
               <h3><i class="bi bi-bell-fill"></i> System Broadcasts</h3>
-              <button id="btnLoadAllMessagesView" class="view-all-msg-btn">View All</button>
+              <div class="bell-panel-header-actions">
+                <button id="btnToggleAdminComposer" class="admin-add-msg-trigger hidden" title="New Alert Message">
+                  <i class="bi bi-plus-circle"></i>
+                </button>
+                <button id="btnLoadAllMessagesView" class="view-all-msg-btn">View All</button>
+              </div>
             </div>
             
             <!-- ADMIN MESSAGE COMPOSER CONTAINER -->
-            <div id="adminMessageComposerArea" class="admin-composer-box hidden">
+            <div id="adminMessageComposerArea" class="admin-composer-box">
               <h4>Compose Live Alert</h4>
-              <input type="text" id="adminMsgTitleInput" placeholder="Alert Title Title...">
-              <textarea id="adminMsgBodyInput" rows="2" placeholder="Type your broadcast message details here..."></textarea>
+              <input type="text" id="adminMsgTitleInput" placeholder="Alert Title...">
+              <textarea id="adminMsgBodyInput" rows="2" placeholder="Type broadcast message details here..."></textarea>
               <button id="btnAdminBroadcastSubmit" class="action-btn safety-btn compact-btn">
                 <i class="bi bi-send"></i> Broadcast Alert
               </button>
@@ -103,7 +108,7 @@
       <span id="motivationText">"Focus determines your reality. Let's make today count!"</span>
     </div>
 
-    <!-- COURSE DASHBOARD ACCESSIBLE EXCLUSIVE BANNER LINK -->
+    <!-- COURSE DASHBOARD EXCLUSIVE ACCESSIBLE LINK -->
     <div id="seat03AccessLink" class="course-access-banner hidden">
       <div class="banner-content">
         <img src="dugsiiye.png" alt="Dugsiie Logo" class="banner-logo" onerror="this.style.display='none';">
@@ -161,7 +166,7 @@
             <span id="timer" class="stat-value">0m 0s</span>
           </div>
 
-          <!-- PREMIUM TIME METRIC FILTER SELECTION DROPDOWN BUTTON -->
+          <!-- DROPDOWN BUTTON -->
           <div id="personalWeeklyBox" class="timeframe-dropdown-wrapper hidden">
             <button id="timeframeDropdownBtn" class="timeframe-select-btn">
               <span id="selectedTimeframeLabel"><i class="bi bi-calendar-week"></i> Your Weekly Total:</span>
@@ -190,7 +195,7 @@
           </div>
         </div>
 
-        <!-- ADMIN AUTHENTICATION PANEL OVERLAY BLOCK -->
+        <!-- ADMIN CLEARANCE BLOCK -->
         <div id="adminAuthBox" class="auth-box hidden animated-fade">
           <h2 class="section-title text-warning"><i class="bi bi-lock-fill"></i> Security Clearance Required</h2>
           <div class="input-group">
@@ -207,7 +212,7 @@
           </div>
         </div>
 
-        <!-- ADMIN MANAGEMENT CONSOLE PANELS -->
+        <!-- ADMIN PANELS -->
         <div id="adminPanel" class="admin-dashboard-panel hidden animated-fade">
           <div class="admin-header">
             <h3><i class="bi bi-speedometer2"></i> Operations Control</h3>
@@ -230,7 +235,7 @@
           </div>
         </div>
 
-        <!-- POPUP INTERACTIVE QUICK MESSAGING MODAL UTILITY -->
+        <!-- QUICK MESSAGING MODAL -->
         <div id="quickStudentMessageModal" class="modal-blur-overlay hidden">
           <div class="modal-window scale-animation">
             <div class="modal-header">
@@ -259,7 +264,7 @@
           </div>
         </div>
 
-        <!-- ACCORDION ATTENDANCE TRACKER COLLAPSIBLE SYSTEM -->
+        <!-- ACCORDION ATTENDANCE TRACKER -->
         <div class="accordion-attendance-wrapper">
           <button id="attendanceHeaderBtn" class="accordion-header-trigger">
             <span><i class="bi bi-clipboard-check"></i> Attendance Logs (Last 5 Events)</span>
@@ -277,7 +282,7 @@
     </div>
   </div>
 
-  <!-- PREMIUM SECURE CHANGE PIN DIALOG FORM MODAL -->
+  <!-- UPDATE SECURE PIN MODAL -->
   <div id="pinModalOverlay" class="modal-blur-overlay hidden">
     <div class="modal-window scale-animation">
       <div class="modal-header">
@@ -300,7 +305,7 @@
     </div>
   </div>
 
-  <!-- DESTRUCTIVE CONFIRMATION MODAL OVERLAY INTERFACE -->
+  <!-- CONFIRMATION MODAL OVERLAY -->
   <div id="confirmationModalOverlay" class="modal-blur-overlay hidden">
     <div class="modal-window scale-animation warning-border">
       <div class="modal-header">
