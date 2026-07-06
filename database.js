@@ -40,10 +40,10 @@ const rememberMe = document.getElementById("rememberMe");
 
 const formBox = document.getElementById("formBox");
 const leaveBtn = document.getElementById("leaveBtn");
-const changePinBtn = document.getElementById("changePinBtn");
 const pinActionBox = document.getElementById("pinActionBox");
 const userStatus = document.getElementById("userStatus");
 const seat03AccessLink = document.getElementById("seat03AccessLink");
+const courseActiveOccupantSublabel = document.getElementById("courseActiveOccupantSublabel");
 
 const onlineCount = document.getElementById("onlineCount");
 const timerBox = document.getElementById("timer");
@@ -66,13 +66,11 @@ const adminPanel = document.getElementById("adminPanel");
 const adminLogoutBtn = document.getElementById("adminLogoutBtn");
 const adminSeatsDashboard = document.getElementById("adminSeatsDashboard");
 
-// INTERACTIVE TIMEFRAME ELEMENTS
 const timeframeDropdownBtn = document.getElementById("timeframeDropdownBtn");
 const timeframeChevron = document.getElementById("timeframeChevron");
 const timeframeDropdownMenu = document.getElementById("timeframeDropdownMenu");
 const selectedTimeframeLabel = document.getElementById("selectedTimeframeLabel");
 
-// MODAL WINDOW INTERFACE OBJECTS
 const pinModalOverlay = document.getElementById("pinModalOverlay");
 const securePinUpdateForm = document.getElementById("securePinUpdateForm");
 const newPinInputField = document.getElementById("newPinInputField");
@@ -86,17 +84,7 @@ const cancelConfirmModalBtn = document.getElementById("cancelConfirmModalBtn");
 const acceptConfirmModalBtn = document.getElementById("acceptConfirmModalBtn");
 const closeConfirmModalBtn = document.getElementById("closeConfirmModalBtn");
 
-// DYNAMIC CORE INTEGRATION ARCHITECTURE NODES
 const btnTriggerEnterCourseEmbed = document.getElementById("btnTriggerEnterCourseEmbed");
-const courseEmbedContainer = document.getElementById("courseEmbedContainer");
-const courseIframeElement = document.getElementById("courseIframeElement");
-const btnCloseCourseEmbed = document.getElementById("btnCloseCourseEmbed");
-const btnToggleFullScreen = document.getElementById("btnToggleFullScreen");
-const btnMinimizeCourse = document.getElementById("btnMinimizeCourse");
-const courseFrameUserSeatBadge = document.getElementById("courseFrameUserSeatBadge");
-const courseFrameUserWelcomeText = document.getElementById("courseFrameUserWelcomeText");
-const headerCourseTimerBadge = document.getElementById("headerCourseTimerBadge");
-const headerCourseTimerValue = document.getElementById("headerCourseTimerValue");
 
 const headerNotificationBellBtn = document.getElementById("headerNotificationBellBtn");
 const bellUnreadCounterBadge = document.getElementById("bellUnreadCounterBadge");
@@ -116,8 +104,30 @@ const btnSubmitQuickStudentMessage = document.getElementById("btnSubmitQuickStud
 const lblRemainingMsgBudgetCounter = document.getElementById("lblRemainingMsgBudgetCounter");
 let selectedQuickMessageText = "";
 
+const mobileStudyRecapBtn = document.getElementById("mobileStudyRecapBtn");
+const studyRecapModalOverlay = document.getElementById("studyRecapModalOverlay");
+const closeRecapModalBtn = document.getElementById("closeRecapModalBtn");
+const adminAddLessonTriggerBtn = document.getElementById("adminAddLessonTriggerBtn");
+const adminLessonComposerArea = document.getElementById("adminLessonComposerArea");
+const lessonTitleInput = document.getElementById("lessonTitleInput");
+const lessonFilterSelect = document.getElementById("lessonFilterSelect");
+const lessonStatusSelect = document.getElementById("lessonStatusSelect");
+const lessonCountLimitSelect = document.getElementById("lessonCountLimitSelect");
+const btnCancelLessonFormSubmit = document.getElementById("btnCancelLessonFormSubmit");
+const btnSaveLessonDetailsData = document.getElementById("btnSaveLessonDetailsData");
+const recapLessonsRenderView = document.getElementById("recapLessonsRenderView");
+const lessonInfoBreakdownBox = document.getElementById("lessonInfoBreakdownBox");
+const lblSelectedInfoLessonName = document.getElementById("lblSelectedInfoLessonName");
+const lessonUsersRatingBreakdownList = document.getElementById("lessonUsersRatingBreakdownList");
+const btnCloseInfoPaneTrigger = document.getElementById("btnCloseInfoPaneTrigger");
+const lessonComposerTitle = document.getElementById("lessonComposerTitle");
+
+const premiumUserCard = document.getElementById("premiumUserCard");
+const lblPremiumUserName = document.getElementById("lblPremiumUserName");
+const lblPremiumUserSeat = document.getElementById("lblPremiumUserSeat");
+
 // ==========================================================================
-// STATE MANAGEMENT CACHE ENGINE
+// STATE MANAGEMENT ENGINE
 // ==========================================================================
 let currentUser = null;
 let timerInterval = null;
@@ -130,18 +140,69 @@ let activeMessageTargetUser = null;
 let showAllMessagesFlag = false;
 let activeBroadcastsRef = null;
 
+let activeRecapFilter = localStorage.getItem("recaps_active_language") || "html";
+let targetEditLessonId = null;
+
+const MOTIVATION_QUOTES = [
+  "Errors and bugs are validation evidence that you are stretching operational capability boundaries. ⚙️",
+  "Focus determines reality — Let us make every single block execution scale gracefully! 🎯",
+  "Consistency beats talent explicitly every single day. Keep typing and iterating! 💻",
+  "Small calculated steps layer incrementally into massive engineering production applications. 🚀",
+  "Your systematic persistence today molds the high-tier full-stack developer you become tomorrow. 👑"
+];
+let typingTimerInstance = null;
+let phraseRotationIntervalInstance = null;
+
+// ==========================================================================
+// TOAST NOTIFICATIONS DISPATCH
+// ==========================================================================
 function toast(msg, type = "info") {
-  const box = document.getElementById("toastContainer");
-  if (!box) return;
+  const container = document.getElementById("toastContainer");
+  if (!container) return;
+  
   const div = document.createElement("div");
   div.className = `toast ${type}`;
-  div.textContent = msg;
-  box.appendChild(div);
-  setTimeout(() => div.remove(), 3000);
+  
+  let iconHtml = '<i class="bi bi-info-circle-fill"></i>';
+  if (type === "success") iconHtml = '<i class="bi bi-check-circle-fill"></i>';
+  if (type === "error") iconHtml = '<i class="bi bi-exclamation-triangle-fill"></i>';
+  if (type === "warning") iconHtml = '<i class="bi bi-exclamation-circle-fill"></i>';
+  if (type === "danger-alert-occupied") iconHtml = '<i class="bi bi-shield-lock-fill"></i>';
+  
+  div.innerHTML = `${iconHtml}<span>${msg}</span>`;
+  container.appendChild(div);
+  
+  setTimeout(() => div.classList.add("show"), 50);
+  setTimeout(() => {
+    div.classList.remove("show");
+    setTimeout(() => div.remove(), 400);
+  }, 4000);
 }
 
 // ==========================================================================
-// MODAL & DIALOG SYSTEMS IMPLEMENTATION LAYER
+// FORM FIELD VISIBILITY TOGGLE (EYE CONTROL)
+// ==========================================================================
+function setupPasswordFieldToggleDriver(triggerIconId, targetInputFieldId) {
+  const icon = document.getElementById(triggerIconId);
+  const field = document.getElementById(targetInputFieldId);
+  if (!icon || !field) return;
+  
+  icon.addEventListener("click", () => {
+    if (field.type === "password") {
+      field.type = "text";
+      icon.className = "bi bi-eye-slash password-toggle-icon";
+    } else {
+      field.type = "password";
+      icon.className = "bi bi-eye password-toggle-icon";
+    }
+  });
+}
+setupPasswordFieldToggleDriver("togglePinEye", "pinInput");
+setupPasswordFieldToggleDriver("toggleAdminEye", "adminPassword");
+setupPasswordFieldToggleDriver("toggleNewPinEye", "newPinInputField");
+
+// ==========================================================================
+// MODAL & DIALOG SYSTEMS
 // ==========================================================================
 function openConfirmationModal(title, msg, onConfirm, onCancel = null) {
   confirmModalTitle.innerHTML = `<i class="bi bi-exclamation-triangle text-danger"></i> ${title}`;
@@ -172,7 +233,7 @@ acceptConfirmModalBtn.addEventListener("click", () => {
 });
 
 // ==========================================================================
-// TIMEFRAME CALCULATOR CONTROLLERS
+// TIMEFRAME CALCULATORS
 // ==========================================================================
 function getWeekIdentifier() {
   const current = new Date();
@@ -249,14 +310,9 @@ function formatLiveSeconds(ms) {
   return `${minutes}m ${secs}s`;
 }
 
-function formatFullStopwatch(ms) {
-  const totalSecs = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSecs / 3600);
-  const minutes = Math.floor((totalSecs % 3600) / 60);
-  const secs = totalSecs % 60;
-  return `${hours.toString().padStart(2, '0')}h:${minutes.toString().padStart(2, '0')}m:${secs.toString().padStart(2, '0')}s`;
-}
-
+// ==========================================================================
+// SESSION MANAGEMENT TIMERS
+// ==========================================================================
 function startTimer() {
   clearInterval(timerInterval);
   timerInterval = setInterval(() => {
@@ -265,6 +321,21 @@ function startTimer() {
     timerBox.innerText = formatLiveSeconds(currentSessionMs);
   }, 1000);
 }
+
+// ==========================================================================
+// RESET INDIVIDUAL SEAT CUSTOM PIN FUNCTION (ADMIN ACTION)
+// ==========================================================================
+window.resetUserSecurityPin = function(seatCode) {
+  if (!isAdminAuthenticated) return;
+  openConfirmationModal(
+    "Reset Security Code PIN", 
+    `Are you sure you want to restore Seat ${seatCode} back to its system default pin configuration standard?`,
+    async () => {
+      await db.ref(`customPins/${seatCode}`).remove();
+      toast(`Security standard reset successful for seat code workspace entry slot: ${seatCode}`, "success");
+    }
+  );
+};
 
 function stopTimer() {
   clearInterval(timerInterval);
@@ -292,36 +363,107 @@ async function syncPersonalAccumulatedTime(seatCode) {
 
 function setStatusText(joined, seat = "", name = "") {
   if (joined) {
-    userStatus.innerHTML = `<i class="bi bi-check-circle-fill"></i> Joined (Seat ${seat})`;
+    userStatus.innerHTML = `<i class="bi bi-check-circle-fill"></i> Joined`;
     userStatus.className = "status-badge active";
     seat03AccessLink.classList.remove("hidden"); 
-    courseFrameUserSeatBadge.innerText = `Seat ${seat}`;
-    courseFrameUserWelcomeText.innerText = `Welcome : ${name}`;
+    
+    lblPremiumUserName.innerText = name;
+    lblPremiumUserSeat.innerText = `Seat Assignment: ${seat}`;
+    premiumUserCard.classList.remove("hidden");
+    
+    initiateDynamicPremiumRotator(name);
   } else {
     userStatus.innerHTML = `<i class="bi bi-dash-circle"></i> Not joined`;
     userStatus.className = "status-badge";
     seat03AccessLink.classList.add("hidden");
-    courseFrameUserSeatBadge.innerText = `Seat --`;
-    courseFrameUserWelcomeText.innerText = `Welcome : Guest`;
-    closeCourseEmbedWindow();
+    premiumUserCard.classList.add("hidden");
+    initiateDynamicPremiumRotator("Guest");
   }
 }
 
 // ==========================================================================
-// CORE TRANSACTIONS & SECURE FORM VALIDATIONS
+// DYNAMIC MOTIVATION STRING ROTATION LOGIC (WITH REQUISITE SPACING & HIGHLIGHTS)
+// ==========================================================================
+function initiateDynamicPremiumRotator(username = "Guest") {
+  clearInterval(phraseRotationIntervalInstance);
+  renderRotatorTextFrame(username);
+  phraseRotationIntervalInstance = setInterval(() => {
+    renderRotatorTextFrame(username);
+  }, 7000);
+}
+
+function renderRotatorTextFrame(username) {
+  const element = document.getElementById("motivationText");
+  if (!element) return;
+  
+  clearInterval(typingTimerInstance);
+  
+  let targetPhrase = MOTIVATION_QUOTES[Math.floor(Math.random() * MOTIVATION_QUOTES.length)];
+  let completeHTMLString = "";
+
+  if (username !== "Guest") {
+    const greetingPool = [
+      `👋 Welcome Back, Master Architect <span class="motivation-highlight-name">${username}</span> ! &nbsp;&nbsp;&nbsp; `,
+      `⚡ Engineering Console Active: <span class="motivation-highlight-name">${username}</span> — &nbsp;&nbsp;&nbsp; `,
+      `🚀 Space Deck Engaged for <span class="motivation-highlight-name">${username}</span> : &nbsp;&nbsp;&nbsp; `,
+      `💎 Premium Access Active ( <span class="motivation-highlight-name">${username}</span> ) -> &nbsp;&nbsp;&nbsp; `,
+      `🔥 Core Compile Initiated By <span class="motivation-highlight-name">${username}</span> — &nbsp;&nbsp;&nbsp; `
+    ];
+    completeHTMLString = greetingPool[Math.floor(Math.random() * greetingPool.length)] + targetPhrase;
+  } else {
+    completeHTMLString = targetPhrase;
+  }
+  
+  element.innerHTML = "";
+  let cursorIndex = 0;
+  let isTagContext = false;
+  let runningBuffer = "";
+
+  typingTimerInstance = setInterval(() => {
+    if (cursorIndex < completeHTMLString.length) {
+      let char = completeHTMLString.charAt(cursorIndex);
+      
+      if (char === '<') {
+        isTagContext = true;
+      }
+      
+      if (isTagContext) {
+        runningBuffer += char;
+        if (char === '>') {
+          isTagContext = false;
+          element.innerHTML += runningBuffer;
+          runningBuffer = "";
+        }
+      } else {
+        if (char === '&' && completeHTMLString.substr(cursorIndex, 6) === '&nbsp;') {
+          element.innerHTML += '&nbsp;';
+          cursorIndex += 5;
+        } else {
+          element.innerHTML += char;
+        }
+      }
+      cursorIndex++;
+    } else {
+      clearInterval(typingTimerInstance);
+    }
+  }, 20);
+}
+
+// ==========================================================================
+// CORE SEAT TRANSACTIONS & CLEAN CLOSED TAB PROTECTION
 // ==========================================================================
 async function joinRoom(name, code, pin) {
   const normalizedCode = code.trim();
   const targetSeat = SEATS[normalizedCode];
 
   if (!targetSeat) {
-    toast("Invalid seat code", "error");
+    toast("Invalid space seat configuration assignment.", "error");
     return;
   }
 
   const blockSnap = await db.ref(`blockedSeats/${normalizedCode}`).get();
   if (blockSnap.val() === true) {
-    toast("This seat is currently blocked by Admin", "error");
+    toast("This workspace seat node is currently locked by admin command.", "error");
     return;
   }
 
@@ -330,19 +472,19 @@ async function joinRoom(name, code, pin) {
   if (customPinSnap.exists()) correctPin = customPinSnap.val();
 
   if (correctPin.trim() !== pin.trim()) {
-    toast("Wrong PIN for this seat", "error");
+    toast("Invalid credentials code access PIN.", "error");
     return;
   }
   
   if (targetSeat.name.toLowerCase() !== name.trim().toLowerCase()) {
-    toast("Name does not match this assigned seat", "error");
+    toast("Assigned identity parameters mismatch.", "error");
     return;
   }
 
   const seatRef = db.ref("seats/" + normalizedCode);
   const snap = await seatRef.get();
   if (snap.exists()) {
-    toast("Seat already claimed/taken", "error");
+    toast("Resource collision: Seat node is already occupied.", "error");
     return;
   }
 
@@ -352,7 +494,9 @@ async function joinRoom(name, code, pin) {
     name: targetSeat.name,
     code: normalizedCode,
     start: Date.now(),
-    inCourse: false
+    inCourse: false,
+    courseEnteredAt: 0,
+    activeCourseName: ""
   };
 
   if (rememberMe.checked) {
@@ -361,10 +505,23 @@ async function joinRoom(name, code, pin) {
     localStorage.setItem("remembered_pin", pin);
     localStorage.setItem("remember_checked", "true");
   } else {
+    const cachedThemePreference = localStorage.getItem("app_theme");
     localStorage.clear();
-    localStorage.setItem("app_theme", document.documentElement.getAttribute("data-theme"));
+    if(cachedThemePreference) localStorage.setItem("app_theme", cachedThemePreference);
     localStorage.setItem("user_selected_timeframe", currentSelectedTimeframe);
+    localStorage.setItem("recaps_active_language", activeRecapFilter);
   }
+
+  seatRef.onDisconnect().remove(); 
+  db.ref("onlineUsers/" + userId).onDisconnect().remove(); 
+  
+  const attendanceDisconnectRef = db.ref("attendance").push();
+  attendanceDisconnectRef.onDisconnect().set({
+    name: targetSeat.name,
+    code: normalizedCode,
+    action: "leave (closed window)",
+    time: firebase.database.ServerValue.TIMESTAMP
+  });
 
   await seatRef.set(currentUser);
   await db.ref("onlineUsers/" + userId).set(currentUser);
@@ -376,9 +533,8 @@ async function joinRoom(name, code, pin) {
     time: Date.now()
   });
 
-  toast(`Welcome ${targetSeat.name}`, "success");
+  toast(`Identity verified! Welcome ${targetSeat.name}`, "success");
   formBox.classList.add("hidden");
-  leaveBtn.classList.remove("hidden");
   pinActionBox.classList.remove("hidden");
   setStatusText(true, normalizedCode, targetSeat.name);
 
@@ -386,15 +542,11 @@ async function joinRoom(name, code, pin) {
   syncPersonalAccumulatedTime(normalizedCode);
   localStorage.setItem("active_user", userId);
   listenToActiveKicks(userId);
+  renderLessonsUI();
 
   clearTimeout(autoRemovalTimeoutInstance);
   autoRemovalTimeoutInstance = setTimeout(() => {
-    openConfirmationModal(
-      "Session Expired", 
-      "Your 03h:30m:00s room session has expired. Click OK to logout or Leave the room completely.",
-      () => { leaveRoom(true); },
-      () => { leaveRoom(true); }
-    );
+    leaveRoom(true); 
   }, SESSION_LIMIT);
 }
 
@@ -408,12 +560,14 @@ async function leaveRoom(auto = false) {
 
   currentUser = null;
   stopTimer();
-  closeCourseEmbedWindow();
 
   formBox.classList.remove("hidden");
-  leaveBtn.classList.add("hidden");
   pinActionBox.classList.add("hidden");
   setStatusText(false);
+
+  db.ref("seats/" + code).onDisconnect().cancel();
+  db.ref("onlineUsers/" + id).onDisconnect().cancel();
+  db.ref("attendance").onDisconnect().cancel();
 
   await db.ref(`weeklyHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
   await db.ref(`dailyHours/${getTodayIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
@@ -426,12 +580,13 @@ async function leaveRoom(auto = false) {
   db.ref("attendance").push({
     name: name,
     code: code,
-    action: auto ? "kicked/auto-leave" : "leave",
+    action: auto ? "expired time" : "leave",
     time: Date.now()
   });
 
-  toast(auto ? "Session terminated automatically" : "Left room successfully", "info");
+  toast(auto ? "Session runtime quota spent. Disconnected automatically." : "Workspace link destroyed successfully.", "info");
   localStorage.removeItem("active_user");
+  renderLessonsUI();
 }
 
 function listenToActiveKicks(userId) {
@@ -443,7 +598,7 @@ function listenToActiveKicks(userId) {
 }
 
 // ==========================================================================
-// EMBEDDED IFRAME COURSE ACCESS DYNAMIC BLOCKS
+// COURSE ACCESSIBILITY CONTEXT ENGINE
 // ==========================================================================
 async function openCourseEmbedWindow() {
   if (!currentUser) return;
@@ -464,64 +619,48 @@ async function openCourseEmbedWindow() {
   }
 
   if (courseOccupied) {
-    toast(`Course access is limited to 1 user concurrently across rooms. Active User: ${currentOccupantName} (Seat ${currentOccupantSeat})`, "error");
+    toast(`CRITICAL RISK ACCESS ERROR: Course resource currently claimed by ${currentOccupantName} (Seat ${currentOccupantSeat})!`, "danger-alert-occupied");
+    triggerTitleDangerAlert("🚨 DANGER ALERT", "⚠️ WORKSPACE COLLISION");
     return;
   }
 
   currentUser.inCourse = true;
-  await db.ref("onlineUsers/" + currentUser.id + "/inCourse").set(true);
+  currentUser.activeCourseName = "Full Stack AI Engineer";
+  currentUser.courseEnteredAt = Date.now();
   
-  courseIframeElement.src = "https://dugsiiye.com/dashboard/student";
-  courseEmbedContainer.classList.remove("hidden");
-  document.body.style.overflow = "hidden";
-
-  headerCourseTimerBadge.classList.remove("hidden");
-  const courseTimeStartStamp = Date.now();
-  headerCourseTimerValue.innerText = "00h:00m:00s";
+  await db.ref("onlineUsers/" + currentUser.id).update({
+    inCourse: true,
+    activeCourseName: "Full Stack AI Engineer",
+    courseEnteredAt: currentUser.courseEnteredAt
+  });
   
-  clearInterval(courseTimerIntervalInstance);
-  courseTimerIntervalInstance = setInterval(() => {
-    const totalSpentInCourse = Date.now() - courseTimeStartStamp;
-    headerCourseTimerValue.innerText = formatFullStopwatch(totalSpentInCourse);
-  }, 1000);
+  await db.ref("seats/" + currentUser.code).update({
+    inCourse: true,
+    activeCourseName: "Full Stack AI Engineer",
+    courseEnteredAt: currentUser.courseEnteredAt
+  });
+  
+  window.open("https://dugsiiye.com/dashboard/student", "_blank");
 }
 
-async function closeCourseEmbedWindow() {
-  courseEmbedContainer.classList.add("hidden");
-  courseIframeElement.src = "";
-  document.body.style.overflow = "";
-  headerCourseTimerBadge.classList.add("hidden");
-  clearInterval(courseTimerIntervalInstance);
-
-  if (document.fullscreenElement) {
-    document.exitFullscreen().catch(() => {});
-  }
-  if (currentUser && currentUser.inCourse) {
-    currentUser.inCourse = false;
-    await db.ref("onlineUsers/" + currentUser.id + "/inCourse").set(false);
-  }
+function triggerTitleDangerAlert(buyerText, vendorText) {
+  const originalTitle = "Study Room Pro - Secure Learning System";
+  let elapsedCount = 0;
+  
+  const flashTimer = setInterval(() => {
+    document.title = (elapsedCount % 2 === 0) ? buyerText : vendorText;
+    elapsedCount++;
+    if (elapsedCount >= 6) { 
+      clearInterval(flashTimer);
+      document.title = originalTitle;
+    }
+  }, 500);
 }
 
 btnTriggerEnterCourseEmbed.addEventListener("click", openCourseEmbedWindow);
-btnCloseCourseEmbed.addEventListener("click", closeCourseEmbedWindow);
-btnMinimizeCourse.addEventListener("click", () => {
-  courseEmbedContainer.classList.add("hidden");
-  document.body.style.overflow = "";
-});
-
-btnToggleFullScreen.addEventListener("click", () => {
-  const frame = document.querySelector(".course-window-frame");
-  if (!document.fullscreenElement) {
-    frame.requestFullscreen().catch(err => {
-      toast(`Error enabling fullscreen: ${err.message}`, "error");
-    });
-  } else {
-    document.exitFullscreen();
-  }
-});
 
 // ==========================================================================
-// DYNAMIC BROADCAST ALERT SYSTEM ENGINE
+// BROADCAST PANEL CONTROLLER
 // ==========================================================================
 headerNotificationBellBtn.addEventListener("click", (e) => {
   e.stopPropagation();
@@ -778,115 +917,51 @@ btnSubmitQuickStudentMessage.addEventListener("click", async () => {
       }
     });
   }
+  db.ref("bellUnreadCounts/guest").transaction(c => (c || 0) + 1);
 
-  toast("Quick status warning transmitted!", "success");
   closeQuickMessagingModalWindow();
+  toast("Status message updated globally!", "success");
 });
 
 // ==========================================================================
 // PIN ACTIONS
 // ==========================================================================
-changePinBtn.addEventListener("click", () => {
-  newPinInputField.value = "";
-  pinModalOverlay.classList.remove("hidden");
-});
-
-function closePinModal() {
-  pinModalOverlay.classList.add("hidden");
+const changePinBtn = document.getElementById("changePinBtn");
+if (changePinBtn) {
+  changePinBtn.addEventListener("click", () => {
+    if (!currentUser) return;
+    newPinInputField.value = "";
+    pinModalOverlay.classList.remove("hidden");
+  });
 }
 
+function closePinUpdateModalWindow() {
+  pinModalOverlay.classList.add("hidden");
+}
 [closePinModalBtn, cancelPinModalBtn].forEach(btn => {
-  btn.addEventListener("click", closePinModal);
+  if (btn) btn.addEventListener("click", closePinUpdateModalWindow);
 });
 
 securePinUpdateForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const activeUserKey = localStorage.getItem("active_user");
-  if (!activeUserKey) return;
-  
-  const snap = await db.ref("onlineUsers/" + activeUserKey).get();
-  if (!snap.exists()) return;
-  const code = snap.val().code;
-  const verifiedNewPin = newPinInputField.value.trim();
+  if (!currentUser) return;
 
-  await db.ref(`customPins/${code}`).set(verifiedNewPin);
+  const newPinValue = newPinInputField.value.trim();
+  if (!newPinValue) return;
+
+  await db.ref(`customPins/${currentUser.code}`).set(newPinValue);
   
   if (localStorage.getItem("remember_checked") === "true") {
-    localStorage.setItem("remembered_pin", verifiedNewPin);
+    localStorage.setItem("remembered_pin", newPinValue);
   }
 
-  toast("PIN passcode updated safely!", "success");
-  closePinModal();
+  closePinUpdateModalWindow();
+  toast("Security access PIN updated successfully!", "success");
 });
 
 // ==========================================================================
-// REALTIME UI RENDERING CONTROLLERS
+// ACCORDION ATTENDANCE ACTION HANDLERS
 // ==========================================================================
-function renderOnlineUI() {
-  usersList.innerHTML = "";
-  const usersArray = Object.values(localizedUserCache);
-  onlineCount.innerText = usersArray.length;
-
-  usersArray.forEach((u) => {
-    const elapsedMs = Date.now() - u.start;
-    const div = document.createElement("div");
-    div.className = "user-card";
-    div.setAttribute("data-start", u.start);
-    
-    const courseStatusBadge = u.inCourse ? `<span class="in-course-indicator-tag"><i class="bi bi-mortarboard-fill"></i> Signed In</span>` : '';
-    const messageActionBtn = currentUser 
-      ? `<button onclick="openQuickMessagingModal('${u.id}', '${u.code}')" class="student-msg-icon-trigger" title="Send Status Alert"><i class="bi bi-envelope"></i></button>` 
-      : '';
-
-    div.innerHTML = `
-      <div class="left-info-block">
-        <span class="name"><i class="bi bi-person-workspace"></i> ${u.name} ${courseStatusBadge}</span>
-        <span class="live-elapsed-badge"><i class="bi bi-clock-history"></i> ${formatHoursMinutes(elapsedMs)}</span>
-      </div>
-      <div class="right-action-block" style="display:flex; align-items:center; gap:8px;">
-        ${messageActionBtn}
-        <span class="code"><i class="bi bi-pin-angle"></i> Seat ${u.code}</span>
-      </div>
-    `;
-    usersList.appendChild(div);
-  });
-}
-
-clearInterval(liveCardsInterval);
-liveCardsInterval = setInterval(() => {
-  document.querySelectorAll(".user-card").forEach((card) => {
-    const startStamp = parseInt(card.getAttribute("data-start"), 10);
-    if (startStamp) {
-      const badge = card.querySelector(".live-elapsed-badge");
-      if (badge) badge.innerHTML = `<i class="bi bi-clock-history"></i> ${formatHoursMinutes(Date.now() - startStamp)}`;
-    }
-  });
-  if (currentUser) {
-    syncPersonalAccumulatedTime(currentUser.code);
-  }
-}, 60000);
-
-db.ref("onlineUsers").on("value", (snap) => {
-  localizedUserCache = snap.val() || {};
-  renderOnlineUI();
-});
-
-db.ref("attendance").limitToLast(5).on("value", (snap) => {
-  attendanceList.innerHTML = "";
-  const records = snap.val() || {};
-  
-  Object.keys(records).reverse().forEach((key) => {
-    const d = records[key];
-    const div = document.createElement("div");
-    div.className = "att-item";
-    const labelColor = d.action === "join" ? "#22c55e" : "#ef4444";
-    const iconType = d.action === "join" ? "bi-box-arrow-in-right" : "bi-box-arrow-left";
-    
-    div.innerHTML = `<strong>${d.name}</strong> (Seat ${d.code}) - <span style="color: ${labelColor}; font-weight:700;"><i class="bi ${iconType}"></i> ${d.action}</span> - <span style="font-size:11px; color:#94a3b8;">${new Date(d.time).toLocaleTimeString()}</span>`;
-    attendanceList.appendChild(div);
-  });
-});
-
 attendanceHeaderBtn.addEventListener("click", () => {
   const isHidden = attendanceContent.classList.contains("hidden");
   if (isHidden) {
@@ -898,206 +973,607 @@ attendanceHeaderBtn.addEventListener("click", () => {
   }
 });
 
-form.addEventListener("submit", (e) => {
-  e.preventDefault();
-  joinRoom(nameInput.value.trim(), codeInput.value.trim(), pinInput.value.trim());
-});
+function initRealtimeDatabaseListeners() {
+  db.ref("seats").on("value", (snap) => {
+    const activeSeats = snap.val() || {};
+    let count = Object.keys(activeSeats).length;
+    onlineCount.innerText = count;
 
-leaveBtn.addEventListener("click", () => {
-  openConfirmationModal(
-    "Confirm Workspace Exit",
-    "Are you sure you want to end your current session and exit this study room?",
-    () => { leaveRoom(false); }
-  );
-});
+    let isOccupied = false;
+    let userCourseName = "";
+    let occupantSeatLabel = "";
+    let entryTimestamp = 0;
 
-// ==========================================================================
-// ADMINISTRATIVE PRIVILEGE DASHBOARD METRICS
-// ==========================================================================
-function scrollDownToAdminSection() {
-  const targetBox = isAdminAuthenticated ? adminPanel : adminAuthBox;
-  if (targetBox) {
-    targetBox.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }
-}
+    Object.values(activeSeats).forEach(u => {
+      if (u.inCourse) {
+        isOccupied = true;
+        userCourseName = u.activeCourseName || "Full Stack AI Engineer";
+        occupantSeatLabel = u.code;
+        entryTimestamp = u.courseEnteredAt || Date.now();
+      }
+    });
 
-adminToggleBtn.addEventListener("click", () => {
-  if (!isAdminAuthenticated) {
-    adminAuthBox.classList.remove("hidden");
-    formBox.classList.add("hidden");
-  }
-  setTimeout(scrollDownToAdminSection, 150);
-});
+    if (isOccupied) {
+      let formattedTime = new Date(entryTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      courseActiveOccupantSublabel.innerHTML = `<span class="course-alert-occupied-tag"><i class="bi bi-exclamation-triangle-fill"></i> Resource Engaged: ${userCourseName} (Seat ${occupantSeatLabel}) at ${formattedTime}</span>`;
+    } else {
+      courseActiveOccupantSublabel.innerHTML = `<span class="course-alert-available-tag"><i class="bi bi-check-circle-fill"></i> Workspace Available Now</span>`;
+    }
+  });
 
-adminCancelBtn.addEventListener("click", () => {
-  adminAuthBox.classList.add("hidden");
-  if (!currentUser) formBox.classList.remove("hidden");
-});
+  db.ref("onlineUsers").on("value", (snap) => {
+    usersList.innerHTML = "";
+    const users = snap.val() || {};
+    
+    if (Object.keys(users).length === 0) {
+      usersList.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-secondary); font-size:13px;">No developers currently active in workspace.</div>';
+      return;
+    }
 
-function syncAdminDashboardMetrics() {
-  const currentWeekId = getWeekIdentifier();
+    Object.values(users).forEach(u => {
+      const card = document.createElement("div");
+      card.className = "user-card";
+      
+      let badgeHtml = "";
+      if (u.inCourse) {
+        let pathTime = u.courseEnteredAt ? new Date(u.courseEnteredAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : "";
+        badgeHtml = `<span class="in-course-indicator-tag"><i class="bi bi-book-half"></i> ${u.activeCourseName || 'In Course'} (${pathTime})</span>`;
+      }
+
+      card.innerHTML = `
+        <div class="left-info-block">
+          <div class="name">${escapeHtml(u.name)} ${badgeHtml}</div>
+          <div class="live-elapsed-badge" data-start="${u.start}">00:00</div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <button class="student-msg-icon-trigger" onclick="openQuickMessagingModal('${u.id}', '${u.code}')" title="Send quick message option">
+            <i class="bi bi-chat-left-text"></i>
+          </button>
+          <div class="code">Seat ${escapeHtml(u.code)}</div>
+        </div>
+      `;
+      usersList.appendChild(card);
+    });
+
+    updateLiveCardElapsedTimers();
+  });
   
-  db.ref("seats").on("value", () => {
-    db.ref("blockedSeats").on("value", () => {
-      db.ref(`weeklyHours/${currentWeekId}`).on("value", () => {
-        db.ref("customPins").on("value", async (customPinsSnap) => {
-          
-          const activeOccupiedSeats = (await db.ref("seats").get()).val() || {};
-          const blockedList = (await db.ref("blockedSeats").get()).val() || {};
-          const weeklyData = (await db.ref(`weeklyHours/${currentWeekId}`).get()).val() || {};
-          const customPins = customPinsSnap.val() || {};
+  db.ref("attendance").limitToLast(5).on("value", (snap) => {
+    attendanceList.innerHTML = "";
+    const events = snap.val() || {};
+    const sortedEvents = Object.values(events).sort((a, b) => b.time - a.time);
 
-          adminSeatsDashboard.innerHTML = "";
+    sortedEvents.forEach(e => {
+      const timeStr = new Date(e.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const rowBlock = document.createElement("div");
+      rowBlock.className = "clean-attendance-row";
 
-          Object.keys(SEATS).forEach((seatId) => {
-            const seatConfig = SEATS[seatId];
-            const liveUser = activeOccupiedSeats[seatId];
-            const isBlocked = !!blockedList[seatId];
-            const totalWeeklyMs = weeklyData[seatId] || 0;
-            const currentActivePin = customPins[seatId] || seatConfig.pin;
+      const nameHtml = `<strong class="clean-att-name">${escapeHtml(e.name)}</strong>`;
+      const seatHtml = `<span class="clean-att-seat-pill">Seat ${e.code}</span>`;
 
-            const row = document.createElement("div");
-            row.style.cssText = "background:var(--bg-surface-elevated); padding:12px; border-radius:8px; margin-bottom:8px; border:1px solid var(--border-color);";
-
-            let statusStr = `<span style="color:#22c55e;">🟢 Free</span>`;
-            if (liveUser) statusStr = `<span style="color:#ef4444; font-weight:bold;">🔴 ${liveUser.name}</span>`;
-            if (isBlocked) statusStr = `<span style="color:#94a3b8; text-decoration:line-through;">🚫 Blocked</span>`;
-
-            row.innerHTML = `
-              <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px;">
-                <div><strong>Seat ${seatId}:</strong> ${statusStr}</div>
-                <div style="color:#ea580c; font-weight:bold;"><i class="bi bi-shield-lock"></i> PIN: ${currentActivePin}</div>
-              </div>
-              <div style="font-size:12px; color:var(--text-secondary); margin-bottom:6px;">
-                <i class="bi bi-clock"></i> Weekly Total: ${formatHoursMinutes(totalWeeklyMs)}
-              </div>
-              <div style="display:flex; gap:6px;">
-                ${liveUser ? `<button onclick="remoteKickSeat('${seatId}', '${liveUser.id}')" class='action-btn danger-btn' style='padding:4px 8px; font-size:11px; width:auto;'><i class="bi bi-person-x"></i> Kick</button>` : ""}
-                <button onclick="remoteToggleBlockSeat('${seatId}', ${isBlocked})" class='action-btn' style='padding:4px 8px; font-size:11px; width:auto; background:${isBlocked ? '#22c55e' : '#ea580c'}; color:#fff;'>
-                  ${isBlocked ? '<i class="bi bi-unlock"></i> Unblock' : '<i class="bi bi-slash-circle"></i> Block'}
-                </button>
-              </div>
-            `;
-            adminSeatsDashboard.appendChild(row);
-          });
-        });
-      });
+      if (e.action === "join") {
+        rowBlock.innerHTML = `
+          <div class="clean-att-left flex-alignment-gap">
+            <div class="clean-att-icon icon-join"><i class="bi bi-box-arrow-in-right"></i></div>
+            <div>${nameHtml} checked into workspace slot ${seatHtml}</div>
+          </div>
+          <div class="clean-att-time"><i class="bi bi-clock"></i> ${timeStr}</div>
+        `;
+      } else {
+        const isAutoEx = e.action.includes("expired");
+        rowBlock.innerHTML = `
+          <div class="clean-att-left flex-alignment-gap">
+            <div class="clean-att-icon icon-leave"><i class="bi ${isAutoEx ? 'bi-hourglass-bottom' : 'bi-box-arrow-left'}"></i></div>
+            <div>${nameHtml} terminated workspace assignment ${seatHtml}</div>
+          </div>
+          <div class="clean-att-time"><i class="bi bi-clock"></i> ${timeStr}</div>
+        `;
+      }
+      attendanceList.appendChild(rowBlock);
     });
   });
 }
 
+function updateLiveCardElapsedTimers() {
+  document.querySelectorAll(".live-elapsed-badge").forEach(badge => {
+    const startTimeStamp = parseInt(badge.getAttribute("data-start"));
+    if (!startTimeStamp) return;
+    const difference = Date.now() - startTimeStamp;
+    
+    const totalSecs = Math.floor(difference / 1000);
+    const hours = Math.floor(totalSecs / 3600);
+    const minutes = Math.floor((totalSecs % 3600) / 60);
+    const secs = totalSecs % 60;
+
+    badge.innerText = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m ${secs}s`;
+  });
+}
+
+clearInterval(liveCardsInterval);
+liveCardsInterval = setInterval(updateLiveCardElapsedTimers, 1000);
+
+// ==========================================================================
+// ADMINISTRATION CONTROL TERMINAL
+// ==========================================================================
+adminToggleBtn.addEventListener("click", () => {
+  if (isAdminAuthenticated) {
+    adminPanel.classList.toggle("hidden");
+    if (!adminPanel.classList.contains("hidden")) {
+      setTimeout(() => {
+        window.scrollTo({
+          top: document.documentElement.scrollHeight,
+          behavior: 'smooth'
+        });
+      }, 50);
+    }
+  } else {
+    adminAuthBox.classList.remove("hidden");
+    setTimeout(() => {
+      adminAuthBox.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }, 50);
+  }
+});
+
+adminCancelBtn.addEventListener("click", () => {
+  adminAuthBox.classList.add("hidden");
+  adminEmail.value = "";
+  adminPassword.value = "";
+});
+
 adminLoginBtn.addEventListener("click", async () => {
+  if (adminLoginBtn.classList.contains("button-submitting-state")) return;
+  const email = adminEmail.value.trim();
+  const password = adminPassword.value.trim();
+
+  if (!email || !password) {
+    toast("Please enter administrative credentials.", "error");
+    return;
+  }
+
+  adminLoginBtn.classList.add("button-submitting-state");
+  adminLoginBtn.innerHTML = `<i class="bi bi-hourglass-split"></i> Authorizing...`;
+
   try {
-    const userCredential = await firebase.auth().signInWithEmailAndPassword(adminEmail.value.trim(), adminPassword.value.trim());
-    if (userCredential.user.uid === "trlabHsJKARs1Emga5dQEN7SfKS2") {
-      isAdminAuthenticated = true;
-      toast("Admin Authorized Successfully", "success");
-      adminAuthBox.classList.add("hidden");
-      adminPanel.classList.remove("hidden");
-      btnToggleAdminComposer.classList.remove("hidden"); 
-      syncAdminDashboardMetrics();
-      setTimeout(scrollDownToAdminSection, 150);
-    } else {
-      toast("Unauthorized account context profile detected.", "error");
-      firebase.auth().signOut();
-    }
-  } catch (err) { toast(err.message, "error"); }
+    await firebase.auth().signInWithEmailAndPassword(email, password);
+    isAdminAuthenticated = true;
+    toast("Clearance verified. Admin deck online.", "success");
+    adminAuthBox.classList.add("hidden");
+    adminPanel.classList.remove("hidden");
+    btnToggleAdminComposer.classList.remove("hidden");
+    adminAddLessonTriggerBtn.classList.remove("hidden");
+    
+    buildAdminDashboardDeck();
+    listenToGlobalBroadcastAlerts();
+    renderLessonsUI();
+  } catch (err) {
+    toast(`Clearance error: ${err.message}`, "error");
+  } finally {
+    adminLoginBtn.classList.remove("button-submitting-state");
+    adminLoginBtn.innerHTML = `<i class="bi bi-shield-lock"></i> Authorize Admin`;
+  }
+});
+adminLogoutBtn.addEventListener("click", async () => {
+  await firebase.auth().signOut();
+  isAdminAuthenticated = false;
+  toast("Administrative terminal disconnected.", "info");
+  adminPanel.classList.add("hidden");
+  btnToggleAdminComposer.classList.add("hidden");
+  adminMessageComposerArea.classList.remove("expanded");
+  adminAddLessonTriggerBtn.classList.add("hidden");
+  adminLessonComposerArea.classList.remove("expanded");
+  
+  listenToGlobalBroadcastAlerts();
+  renderLessonsUI();
 });
 
-adminLogoutBtn.addEventListener("click", () => {
-  openConfirmationModal(
-    "Disconnect Admin Dashboard",
-    "Are you sure you want to completely log out of the admin console dashboard?",
-    () => {
-      firebase.auth().signOut().catch(() => {});
-      isAdminAuthenticated = false;
-      adminPanel.classList.add("hidden");
-      btnToggleAdminComposer.classList.add("hidden");
-      adminMessageComposerArea.classList.remove("expanded");
-      if (!currentUser) formBox.classList.remove("hidden");
-      toast("Admin Disconnected Safely", "info");
-    }
-  );
-});
+function buildAdminDashboardDeck() {
+  adminSeatsDashboard.innerHTML = "";
+  
+  Object.keys(SEATS).forEach(code => {
+    const config = SEATS[code];
+    const row = document.createElement("div");
+    row.className = "recap-analytics-row";
+    row.style.gridTemplateColumns = "1.2fr 0.8fr 1.5fr";
+    row.style.padding = "10px 0";
+    
+    row.innerHTML = `
+      <div style="font-weight:700; font-size:13px;">Seat ${code} (${config.name})</div>
+      <div id="admin-seat-status-${code}" style="font-size:12px; color:var(--text-secondary);">Offline</div>
+      <div style="display:flex; gap:6px; justify-content:flex-end; align-items:center;">
+        <button onclick="resetUserSecurityPin('${code}')" class="action-btn primary-btn compact-btn" style="padding:4px 8px; font-size:11px; width:auto; background-color:#2563eb;" title="Reset user pin to default setup"><i class="bi bi-arrow-counterclockwise"></i> Reset PIN</button>
+        <button id="btn-lock-${code}" onclick="toggleSeatBlock('${code}')" class="premium-btn compact-btn" style="padding:4px 8px; font-size:11px; margin:0;"><i class="bi bi-lock"></i> Lock</button>
+        <button id="btn-kick-${code}" onclick="kickSeatUser('${code}')" class="action-btn danger-btn compact-btn hidden" style="padding:4px 8px; font-size:11px; width:auto; margin:0;"><i class="bi bi-power"></i> Kick</button>
+      </div>
+    `;
+    adminSeatsDashboard.appendChild(row);
+  });
 
-window.remoteKickSeat = async function(seatCode, userId) {
+  db.ref("seats").on("value", (snap) => {
+    const active = snap.val() || {};
+    Object.keys(SEATS).forEach(code => {
+      const statusText = document.getElementById(`admin-seat-status-${code}`);
+      const kickBtn = document.getElementById(`btn-kick-${code}`);
+      if (!statusText) return;
+
+      if (active[code]) {
+        statusText.innerHTML = '<span class="text-success" style="color:var(--color-success); font-weight:700;">Active</span>';
+        if (kickBtn) kickBtn.classList.remove("hidden");
+      } else {
+        statusText.innerText = "Offline";
+        if (kickBtn) kickBtn.classList.add("hidden");
+      }
+    });
+  });
+
+  db.ref("blockedSeats").on("value", (snap) => {
+    const blocked = snap.val() || {};
+    Object.keys(SEATS).forEach(code => {
+      const lockBtn = document.getElementById(`btn-lock-${code}`);
+      if (!lockBtn) return;
+      if (blocked[code] === true) {
+        lockBtn.innerHTML = '<i class="bi bi-unlock"></i> Unlock';
+        lockBtn.className = "action-btn warning-btn compact-btn";
+        lockBtn.style.width = "auto";
+        lockBtn.style.padding = "4px 8px";
+        lockBtn.style.fontSize = "11px";
+      } else {
+        lockBtn.innerHTML = '<i class="bi bi-lock"></i> Lock';
+        lockBtn.className = "premium-btn compact-btn";
+        lockBtn.style.padding = "4px 8px";
+        lockBtn.style.fontSize = "11px";
+      }
+    });
+  });
+}
+
+window.toggleSeatBlock = async function(code) {
+  if (!isAdminAuthenticated) return;
+  const ref = db.ref(`blockedSeats/${code}`);
+  const snap = await ref.get();
+  const currentState = snap.val() || false;
+  
+  await ref.set(!currentState);
+  toast(`Seat ${code} configuration updated successfully.`, "success");
+};
+
+window.kickSeatUser = function(code) {
   if (!isAdminAuthenticated) return;
   openConfirmationModal(
-    "Force Seat Removal",
-    `Are you sure you want to disconnect user session on Seat ${seatCode}?`,
+    "Terminate Student Session",
+    `Are you absolutely sure you want to eject the user from Seat ${code}?`,
     async () => {
-      const userSnap = await db.ref("onlineUsers/" + userId).get();
-      if (userSnap.exists()) {
-        const sessionDuration = Date.now() - userSnap.val().start;
-        await db.ref(`weeklyHours/${getWeekIdentifier()}/${seatCode}`).transaction((val) => (val || 0) + sessionDuration);
-        await db.ref(`dailyHours/${getTodayIdentifier()}/${seatCode}`).transaction((val) => (val || 0) + sessionDuration);
-        await db.ref(`monthlyHours/${getMonthIdentifier()}/${seatCode}`).transaction((val) => (val || 0) + sessionDuration);
-        await db.ref(`allTimeHours/${seatCode}`).transaction((val) => (val || 0) + sessionDuration);
+      const snap = await db.ref(`seats/${code}`).get();
+      if (snap.exists()) {
+        const userData = snap.val();
+        await db.ref(`seats/${code}`).remove();
+        await db.ref(`onlineUsers/${userData.id}`).remove();
+        toast(`Seat ${code} cleared by administrative command.`, "info");
       }
-      await db.ref(`seats/${seatCode}`).remove();
-      await db.ref(`onlineUsers/${userId}`).remove();
-      db.ref("attendance").push({ name: "Kicked User", code: seatCode, action: "kicked", time: Date.now() });
-      toast("User terminated by administrative command", "info");
     }
   );
 };
 
-window.remoteToggleBlockSeat = async function(seatCode, currentBlockStatus) {
+// ==========================================================================
+// RECAP MATRIX CONTROLLERS 
+// ==========================================================================
+mobileStudyRecapBtn.addEventListener("click", () => {
+  studyRecapModalOverlay.classList.remove("hidden");
+  document.body.classList.add("modal-open"); // Locks the background
+  renderLessonsUI();
+});
+
+// Replace the close recap modal button listener block with this code:
+closeRecapModalBtn.addEventListener("click", () => {
+  studyRecapModalOverlay.classList.add("hidden");
+  document.body.classList.remove("modal-open"); // Unlocks the background
+  adminLessonComposerArea.classList.remove("expanded");
+  targetEditLessonId = null;
+});
+
+adminAddLessonTriggerBtn.addEventListener("click", () => {
+  lessonComposerTitle.innerText = "Create New Dynamic Lesson";
+  lessonTitleInput.value = "";
+  targetEditLessonId = null;
+  adminLessonComposerArea.classList.toggle("expanded");
+});
+
+btnCancelLessonFormSubmit.addEventListener("click", () => {
+  adminLessonComposerArea.classList.remove("expanded");
+  lessonTitleInput.value = "";
+  targetEditLessonId = null;
+});
+
+document.querySelectorAll(".filter-chip").forEach(chip => {
+  chip.addEventListener("click", function() {
+    document.querySelectorAll(".filter-chip").forEach(c => c.classList.remove("active"));
+    this.classList.add("active");
+    activeRecapFilter = this.getAttribute("data-filter");
+    localStorage.setItem("recaps_active_language", activeRecapFilter);
+    renderLessonsUI();
+  });
+});
+
+lessonCountLimitSelect.addEventListener("change", renderLessonsUI);
+
+btnSaveLessonDetailsData.addEventListener("click", async () => {
   if (!isAdminAuthenticated) return;
-  if (currentBlockStatus) {
-    await db.ref(`blockedSeats/${seatCode}`).remove();
-    toast(`Seat ${seatCode} unblocked`, "success");
+  const title = lessonTitleInput.value.trim();
+  const lang = lessonFilterSelect.value;
+  const status = lessonStatusSelect.value;
+
+  if (!title) {
+    toast("Please specify a valid topic title.", "warning");
+    return;
+  }
+
+  if (targetEditLessonId) {
+    await db.ref(`lessons/${targetEditLessonId}`).update({
+      title: title,
+      language: lang,
+      status: status
+    });
+    toast("Lesson matrix updated successfully!", "success");
   } else {
-    const currentOccupantSnap = await db.ref(`seats/${seatCode}`).get();
-    if (currentOccupantSnap.exists()) {
-      toast("Cannot block an occupied seat. Kick the student first.", "error");
+    await db.ref("lessons").push({
+      title: title,
+      language: lang,
+      status: status,
+      timestamp: Date.now()
+    });
+    toast("New custom lesson module registered successfully!", "success");
+  }
+
+  lessonTitleInput.value = "";
+  adminLessonComposerArea.classList.remove("expanded");
+  targetEditLessonId = null;
+  renderLessonsUI();
+});
+
+function renderLessonsUI() {
+  const limitValue = lessonCountLimitSelect.value;
+  
+  db.ref("lessons").off();
+  db.ref("lessons").on("value", async (snap) => {
+    recapLessonsRenderView.innerHTML = "";
+    const data = snap.val() || {};
+    
+    let list = Object.keys(data).map(k => ({ id: k, ...data[k] }))
+                     .filter(item => item.language === activeRecapFilter);
+                     
+    list.sort((a, b) => b.timestamp - a.timestamp);
+    if (limitValue !== "all") {
+      list = list.slice(0, parseInt(limitValue));
+    }
+
+    if (list.length === 0) {
+      recapLessonsRenderView.innerHTML = '<div style="text-align:center; padding:12px; font-size:12px; color:var(--text-secondary);">No topics created under this framework indicator.</div>';
       return;
     }
-    await db.ref(`blockedSeats/${seatCode}`).set(true);
-    toast(`Seat ${seatCode} blocked explicitly`, "warning");
+
+    const userRatingsSnap = await db.ref("lessonRatings").get();
+    const allRatings = userRatingsSnap.val() || {};
+
+    list.forEach(item => {
+      const block = document.createElement("div");
+      block.className = "bell-msg-item";
+      block.style.borderLeft = "3px solid var(--color-primary)";
+      
+      let currentLessonRatings = allRatings[item.id] || {};
+      let totalUsersRated = Object.keys(currentLessonRatings).length;
+      
+      let badgeClass = totalUsersRated > 0 ? "rating-badge-status rated" : "rating-badge-status unrated";
+      let badgeLabel = totalUsersRated > 0 ? `✅ Reviewed (${totalUsersRated})` : `⚠️ Unrated`;
+      
+      // Compute status dynamic class values
+      let currentStatus = (item.status || 'complete').toLowerCase();
+      let statusClass = "complete";
+      if(currentStatus === 'pending') statusClass = "pending";
+      if(currentStatus === 'in review' || currentStatus === 'review') statusClass = "review";
+
+      let adminControlsHtml = "";
+      if (isAdminAuthenticated) {
+        adminControlsHtml = `
+          <div style="display:flex; gap:8px; align-items:center;">
+            <a href="javascript:void(0)" onclick="triggerEditLessonModule(event, '${item.id}', '${escapeHtml(item.title)}', '${item.language}', '${item.status}')" style="color:var(--color-warning);"><i class="bi bi-pencil-square"></i></a>
+            <a href="javascript:void(0)" onclick="triggerDeleteLessonModule(event, '${item.id}')" style="color:var(--color-danger);"><i class="bi bi-trash-fill"></i></a>
+          </div>
+        `;
+      }
+
+      let starInteractiveHtml = "";
+      if (currentUser) {
+        let assignedUserRatingScore = currentLessonRatings[currentUser.code] || 0;
+        starInteractiveHtml = `<div class="star-rating-container">`;
+        for (let i = 1; i <= 5; i++) {
+          let activeStarClass = i <= assignedUserRatingScore ? "bi-star-fill active" : "bi-star";
+          starInteractiveHtml += `<i class="bi ${activeStarClass}" onclick="toggleUserLessonRating('${item.id}', ${i})"></i>`;
+        }
+        starInteractiveHtml += `</div>`;
+      }
+
+      block.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+          <span class="${badgeClass}" style="cursor:pointer;" onclick="displayLessonBreakdownMetrics('${item.id}', '${escapeHtml(item.title)}')">${badgeLabel}</span>
+          ${adminControlsHtml}
+        </div>
+        <h4 style="font-size:13px; font-weight:700; color:var(--text-primary); margin-bottom:4px;">${escapeHtml(item.title)}</h4>
+        <div style="display:flex; justify-content:between; align-items:center; width:100%; flex-wrap:wrap; gap:6px;">
+          <span class="status-pill-indicator ${statusClass}">Status: ${currentStatus}</span>
+          <div style="margin-left:auto;">
+            ${starInteractiveHtml}
+          </div>
+        </div>
+      `;
+      recapLessonsRenderView.appendChild(block);
+    });
+  });
+}
+
+// Replace this function with the code below:
+window.toggleUserLessonRating = async function(lessonId, specificScore = 5) {
+  if (!currentUser) return;
+  const path = `lessonRatings/${lessonId}/${currentUser.code}`;
+  const snap = await db.ref(path).get();
+  
+  if (snap.exists() && snap.val() === specificScore) {
+    await db.ref(path).remove();
+    toast("Review milestone feedback removed.", "info");
+  } else {
+    await db.ref(path).set(specificScore);
+    toast(`Lesson marked reviewed with ${specificScore}/5 Stars!`, "success");
   }
+  renderLessonsUI();
+};
+
+// Replace this function with the code below:
+window.displayLessonBreakdownMetrics = async function(lessonId, lessonName) {
+  lblSelectedInfoLessonName.innerText = lessonName;
+  lessonUsersRatingBreakdownList.innerHTML = "";
+  
+  const snap = await db.ref(`lessonRatings/${lessonId}`).get();
+  const ratings = snap.val() || {};
+  const codes = Object.keys(ratings);
+
+  if (codes.length === 0) {
+    lessonUsersRatingBreakdownList.innerHTML = '<div style="font-size:12px; color:var(--text-secondary);">No student developer has reviewed this topic module yet.</div>';
+  } else {
+    codes.forEach(c => {
+      let studentName = SEATS[c] ? SEATS[c].name : "Unknown User";
+      let starsGiven = ratings[c] || 5;
+      
+      const div = document.createElement("div");
+      div.className = "rated-person-row"; // Turns text green automatically for completion
+      div.innerHTML = `<i class="bi bi-person-check-fill"></i> <span><strong>${studentName}</strong> (Seat ${c}) marked complete — <strong>${starsGiven}/5 ⭐</strong></span>`;
+      lessonUsersRatingBreakdownList.appendChild(div);
+    });
+  }
+  lessonInfoBreakdownBox.classList.remove("hidden");
+};
+
+btnCloseInfoPaneTrigger.addEventListener("click", () => {
+  lessonInfoBreakdownBox.classList.add("hidden");
+});
+
+window.triggerDeleteLessonModule = function(e, id) {
+  if (e) e.stopPropagation();
+  openConfirmationModal(
+    "Drop Lesson Module",
+    "Are you absolutely certain you want to remove this topic profile permanently?",
+    async () => {
+      await db.ref(`lessons/${id}`).remove();
+      await db.ref(`lessonRatings/${id}`).remove();
+      toast("Lesson dropped from tracking record index.", "info");
+      renderLessonsUI();
+    }
+  );
+};
+
+window.triggerEditLessonModule = function(e, id, title, language, status) {
+  if (e) e.stopPropagation();
+  lessonComposerTitle.innerText = "Modify Current Module Metrics";
+  lessonTitleInput.value = title;
+  lessonFilterSelect.value = language;
+  lessonStatusSelect.value = status || "complete";
+  targetEditLessonId = id;
+  
+  adminLessonComposerArea.classList.add("expanded");
 };
 
 // ==========================================================================
-// LIGHT/DARK THEME MANAGEMENT
+// CORE SUBMIT HANDLERS
 // ==========================================================================
-const themeToggleBtn = document.getElementById("themeToggleBtn");
-const sunIcon = document.getElementById("sunIcon");
-const moonIcon = document.getElementById("moonIcon");
+// Replace the join form submission event handler with this code:
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const joinBtn = document.getElementById("joinBtn");
+  if (joinBtn.classList.contains("button-submitting-state")) return;
 
-function initializeThemeSystem() {
-  const cached = localStorage.getItem("app_theme");
-  if (cached) {
-    setSystemTheme(cached);
-  } else {
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    setSystemTheme(prefersDark ? "dark" : "light");
+  joinBtn.classList.add("button-submitting-state");
+  joinBtn.innerHTML = `<i class="bi bi-hourglass-split"></i> Joining...`;
+
+  try {
+    const name = nameInput.value;
+    const code = codeInput.value;
+    const pin = pinInput.value;
+    await joinRoom(name, code, pin);
+  } finally {
+    joinBtn.classList.remove("button-submitting-state");
+    joinBtn.innerHTML = `<i class="bi bi-box-arrow-in-right"></i> Claim Seat Space`;
   }
-}
+});
 
-function setSystemTheme(theme) {
-  document.documentElement.setAttribute("data-theme", theme);
-  localStorage.setItem("app_theme", theme);
-  if (theme === "dark") {
-    sunIcon.classList.remove("hidden");
-    moonIcon.classList.add("hidden");
-  } else {
-    sunIcon.classList.add("hidden");
-    moonIcon.classList.remove("hidden");
-  }
-}
 
-themeToggleBtn.addEventListener("click", () => {
-  const activeTheme = document.documentElement.getAttribute("data-theme");
-  setSystemTheme(activeTheme === "dark" ? "light" : "dark");
+
+leaveBtn.addEventListener("click", () => {
+  openConfirmationModal(
+    "Disconnect Space Link",
+    "Are you sure you want to terminate your current workspace session runtime?",
+    async () => {
+      await leaveRoom(false);
+    }
+  );
 });
 
 // ==========================================================================
-// PERSISTENT REFRESH GUARD ENGINES
+// PRE-AUTHENTICATION BOOTSTRAPPER
 // ==========================================================================
-window.addEventListener("DOMContentLoaded", () => {
-  initializeThemeSystem();
+async function bootstrapApplicationWorkspaceRuntime() {
+  const targetTheme = localStorage.getItem("app_theme") || "dark";
+  document.documentElement.setAttribute("data-theme", targetTheme);
+  
+  const sun = document.getElementById("sunIcon");
+  const moon = document.getElementById("moonIcon");
+  if (targetTheme === "dark") {
+    if (sun) sun.classList.remove("hidden");
+    if (moon) moon.classList.add("hidden");
+  } else {
+    if (sun) sun.classList.add("hidden");
+    if (moon) moon.classList.remove("hidden");
+  }
+
+  const savedLanguageFilter = localStorage.getItem("recaps_active_language") || "html";
+  activeRecapFilter = savedLanguageFilter;
+  document.querySelectorAll(".filter-chip").forEach(c => {
+    if (c.getAttribute("data-filter") === activeRecapFilter) c.classList.add("active");
+    else c.classList.remove("active");
+  });
+
   updateTimeframeButtonLabelText();
+
+  const cacheUserId = localStorage.getItem("active_user");
+  if (cacheUserId) {
+    const onlineSnap = await db.ref("onlineUsers/" + cacheUserId).get();
+    if (onlineSnap.exists()) {
+      currentUser = onlineSnap.val();
+      
+      formBox.classList.add("hidden");
+      leaveBtn.classList.remove("hidden");
+      pinActionBox.classList.remove("hidden");
+      setStatusText(true, currentUser.code, currentUser.name);
+
+      startTimer();
+      syncPersonalAccumulatedTime(currentUser.code);
+      listenToActiveKicks(cacheUserId);
+
+      db.ref("seats/" + currentUser.code).onDisconnect().remove();
+      db.ref("onlineUsers/" + cacheUserId).onDisconnect().remove();
+      
+      const sessionQuotaSpent = Date.now() - currentUser.start;
+      const remainingTime = SESSION_LIMIT - sessionQuotaSpent;
+      
+      if (remainingTime <= 0) {
+        leaveRoom(true);
+      } else {
+        clearTimeout(autoRemovalTimeoutInstance);
+        autoRemovalTimeoutInstance = setTimeout(() => { leaveRoom(true); }, remainingTime);
+      }
+    } else {
+      localStorage.removeItem("active_user");
+      setStatusText(false);
+    }
+  } else {
+    setStatusText(false);
+  }
 
   if (localStorage.getItem("remember_checked") === "true") {
     nameInput.value = localStorage.getItem("remembered_name") || "";
@@ -1106,33 +1582,26 @@ window.addEventListener("DOMContentLoaded", () => {
     rememberMe.checked = true;
   }
 
-  firebase.auth().onAuthStateChanged(async (user) => {
-    if (user && user.uid === "trlabHsJKARs1Emga5dQEN7SfKS2") {
-      isAdminAuthenticated = true;
-      adminAuthBox.classList.add("hidden");
-      formBox.classList.add("hidden");
-      adminPanel.classList.remove("hidden");
-      btnToggleAdminComposer.classList.remove("hidden");
-      syncAdminDashboardMetrics();
-    }
-    
-    const savedStudentId = localStorage.getItem("active_user");
-    if (savedStudentId) {
-      const snap = await db.ref("onlineUsers/" + savedStudentId).get();
-      if (snap.exists()) {
-        currentUser = snap.val();
-        formBox.classList.add("hidden");
-        leaveBtn.classList.remove("hidden");
-        pinActionBox.classList.remove("hidden");
-        setStatusText(true, currentUser.code, currentUser.name);
-        startTimer();
-        syncPersonalAccumulatedTime(currentUser.code);
-        listenToActiveKicks(savedStudentId);
-      } else {
-        localStorage.removeItem("active_user");
-      }
-    }
-    
-    listenToGlobalBroadcastAlerts();
-  });
+  initRealtimeDatabaseListeners();
+  listenToGlobalBroadcastAlerts();
+  renderLessonsUI();
+}
+
+document.getElementById("themeToggleBtn").addEventListener("click", () => {
+  const current = document.documentElement.getAttribute("data-theme");
+  const target = current === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", target);
+  localStorage.setItem("app_theme", target);
+
+  const sun = document.getElementById("sunIcon");
+  const moon = document.getElementById("moonIcon");
+  if (target === "dark") {
+    if (sun) sun.classList.remove("hidden");
+    if (moon) moon.classList.add("hidden");
+  } else {
+    if (sun) sun.classList.add("hidden");
+    if (moon) moon.classList.remove("hidden");
+  }
 });
+
+window.addEventListener("DOMContentLoaded", bootstrapApplicationWorkspaceRuntime);
