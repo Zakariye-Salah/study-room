@@ -168,7 +168,7 @@ let activeAttendanceEventsCache = [];
 let liveAttendanceLogLimit = parseInt(localStorage.getItem("attendance_log_limit") || "5", 10);
 let attendanceRefreshInterval = null;
 let staleSessionMonitorInterval = null;
-const ATTENDANCE_REFRESH_INTERVAL_MS = 2000;
+const ATTENDANCE_REFRESH_INTERVAL_MS = 10000; // safer for Firebase free plan
 const STALE_SESSION_SWEEP_INTERVAL_MS = 30000;
 
 const JOIN_WELCOME_MESSAGES = [
