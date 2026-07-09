@@ -160,8 +160,8 @@ let sessionHeartbeatInterval = null;
 let activeAttendanceReportRange = "today";
 let activeAttendanceReportUser = "all";
 let activeAttendanceReportLimit = 10;
-const ACTIVE_PRESENCE_GRACE_MS = 10000;
-const HEARTBEAT_INTERVAL_MS = 5000;
+const ACTIVE_PRESENCE_GRACE_MS = 90000;
+const HEARTBEAT_INTERVAL_MS = 15000;
 const COURSE_SESSION_COLLECTION = "courseSessions";
 
 let activeAttendanceEventsCache = [];
@@ -169,7 +169,7 @@ let liveAttendanceLogLimit = parseInt(localStorage.getItem("attendance_log_limit
 let attendanceRefreshInterval = null;
 let staleSessionMonitorInterval = null;
 const ATTENDANCE_REFRESH_INTERVAL_MS = 2000;
-const STALE_SESSION_SWEEP_INTERVAL_MS = 2500;
+const STALE_SESSION_SWEEP_INTERVAL_MS = 30000;
 
 const JOIN_WELCOME_MESSAGES = [
   "Welcome aboard — great progress starts here.",
@@ -187,6 +187,7 @@ const JOIN_WELCOME_MESSAGES = [
 let currentDeviceId = localStorage.getItem("device_id") || "";
 let currentTabId = sessionStorage.getItem("active_tab_id") || "";
 let currentSessionToken = sessionStorage.getItem("active_session_token") || "";
+let isSessionTeardownInProgress = false;
 
 const MOTIVATION_QUOTES = [
   "Errors and bugs are validation evidence that you are stretching operational capability boundaries. ⚙️",
@@ -699,6 +700,113 @@ function startSessionHeartbeat() {
 function stopSessionHeartbeat() {
   clearInterval(sessionHeartbeatInterval);
   sessionHeartbeatInterval = null;
+}
+
+function focusDefaultCourseAction() {
+  if (!seat03AccessLink || !btnTriggerEnterCourseEmbed) return;
+  seat03AccessLink.scrollIntoView({ behavior: "smooth", block: "center" });
+  btnTriggerEnterCourseEmbed.focus({ preventScroll: true });
+}
+
+function updateCourseActionButton() {
+  if (!btnTriggerEnterCourseEmbed) return;
+  if (!currentUser) {
+    btnTriggerEnterCourseEmbed.innerHTML = 'Enter Course <i class="bi bi-arrow-right"></i>';
+    btnTriggerEnterCourseEmbed.disabled = true;
+    btnTriggerEnterCourseEmbed.classList.remove("leave-course-mode");
+    return;
+  }
+
+  btnTriggerEnterCourseEmbed.disabled = false;
+  if (currentUser.inCourse) {
+    btnTriggerEnterCourseEmbed.innerHTML = 'Leave Course <i class="bi bi-box-arrow-left"></i>';
+    btnTriggerEnterCourseEmbed.classList.add("leave-course-mode");
+  } else {
+    btnTriggerEnterCourseEmbed.innerHTML = 'Enter Course <i class="bi bi-arrow-right"></i>';
+    btnTriggerEnterCourseEmbed.classList.remove("leave-course-mode");
+  }
+}
+
+async function leaveCourse(auto = false, reason = "manual-course-leave", opts = {}) {
+  if (!currentUser || !currentUser.inCourse || isSessionTeardownInProgress) return false;
+  const { silent = false, skipConfirm = false } = opts;
+
+  if (!auto && !skipConfirm) {
+    return new Promise((resolve) => {
+      openConfirmationModal(
+        "Leave Course",
+        "Are you sure you want to leave this course?",
+        async () => {
+          const result = await leaveCourse(false, reason, { silent: false, skipConfirm: true });
+          resolve(result);
+        },
+        () => resolve(false)
+      );
+    });
+  }
+
+  currentUser.inCourse = false;
+  currentUser.activeCourseName = "";
+  currentUser.courseEnteredAt = 0;
+  currentUser.lastSeen = Date.now();
+  currentUser.heartbeatAt = Date.now();
+  const code = currentUser.code;
+  const id = currentUser.id;
+  const sessionToken = currentSessionToken;
+  const leaveTime = Date.now();
+
+  if (currentCourseSessionId) {
+    await finalizeActiveCourseSession(auto ? "terminated" : reason);
+  }
+
+  await db.ref(`seatLeases/${code}`).transaction((current) => {
+    if (!current || (current.sessionToken && current.sessionToken !== sessionToken)) {
+      return current;
+    }
+    return {
+      ...current,
+      inCourse: false,
+      activeCourseName: "",
+      courseEnteredAt: 0,
+      lastSeen: leaveTime,
+      heartbeatAt: leaveTime
+    };
+  }).catch(() => {});
+
+  await db.ref(`onlineUsers/${id}`).update({
+    inCourse: false,
+    activeCourseName: "",
+    courseEnteredAt: 0,
+    lastSeen: leaveTime,
+    heartbeatAt: leaveTime
+  }).catch(() => {});
+
+  await db.ref(`seats/${code}`).update({
+    inCourse: false,
+    activeCourseName: "",
+    courseEnteredAt: 0,
+    lastSeen: leaveTime,
+    heartbeatAt: leaveTime
+  }).catch(() => {});
+
+  db.ref("attendance").push({
+    name: currentUser.name,
+    code,
+    action: auto ? "terminated" : "course-leave",
+    time: leaveTime,
+    sessionDuration: Math.max(0, leaveTime - (currentUser.start || leaveTime)),
+    reason: auto ? "stale-session-sweep" : reason,
+    courseName: "Full Stack AI Engineer"
+  });
+
+  if (!silent) {
+    toast("You left the course successfully.", "success");
+  }
+
+  updateCourseActionButton();
+  setStatusText(true, code, currentUser.name);
+  focusDefaultCourseAction();
+  return true;
 }
 
 async function finalizeActiveCourseSession(reason = "leave") {
@@ -1272,6 +1380,7 @@ function setStatusText(joined, seat = "", name = "") {
     lblPremiumUserSeat.innerText = `Seat Assignment: ${seat}`;
     premiumUserCard.classList.remove("hidden");
 
+    updateCourseActionButton();
     initiateDynamicPremiumRotator(name);
   } else {
     userStatus.innerHTML = `<i class="bi bi-dash-circle"></i> Not joined`;
@@ -1280,6 +1389,11 @@ function setStatusText(joined, seat = "", name = "") {
     if (leaveBtn) leaveBtn.classList.add("hidden");
     if (btnOpenAttendanceReportModal) btnOpenAttendanceReportModal.classList.add("hidden");
     premiumUserCard.classList.add("hidden");
+    if (btnTriggerEnterCourseEmbed) {
+      btnTriggerEnterCourseEmbed.innerHTML = 'Enter Course <i class="bi bi-arrow-right"></i>';
+      btnTriggerEnterCourseEmbed.disabled = true;
+      btnTriggerEnterCourseEmbed.classList.remove("leave-course-mode");
+    }
     initiateDynamicPremiumRotator("Guest");
   }
 }
@@ -1465,88 +1579,83 @@ async function joinRoom(name, code, pin) {
   startSessionHeartbeat();
   syncPersonalAccumulatedTime(normalizedCode);
   localStorage.setItem("active_user", userId);
+  updateCourseActionButton();
+  focusDefaultCourseAction();
   renderLessonsUI();
-
-  window.addEventListener('pagehide', handlePageExit, { once: true });
-  window.addEventListener('beforeunload', handlePageExit, { once: true });
 }
 
 
 async function leaveRoom(auto = false, reason = "leave") {
-  if (!currentUser) return;
+  if (!currentUser || isSessionTeardownInProgress) return;
+  isSessionTeardownInProgress = true;
 
-  const code = currentUser.code;
-  const id = currentUser.id;
-  const name = currentUser.name;
-  const sessionDuration = Date.now() - currentUser.start;
-  const wasInCourse = !!currentUser.inCourse;
-  const liveToken = currentSessionToken;
+  try {
+    const code = currentUser.code;
+    const id = currentUser.id;
+    const name = currentUser.name;
+    const sessionDuration = Date.now() - currentUser.start;
+    const liveToken = currentSessionToken;
+    const wasInCourse = !!currentUser.inCourse;
 
-  if (wasInCourse) {
-    await finalizeActiveCourseSession(auto ? "terminated" : "leave");
-  }
+    if (wasInCourse) {
+      await leaveCourse(true, "room-leave", { silent: true, skipConfirm: true });
+    }
 
-  currentUser = null;
-  stopTimer();
-  stopSessionHeartbeat();
+    currentUser = null;
+    stopTimer();
+    stopSessionHeartbeat();
 
-  formBox.classList.remove("hidden");
-  pinActionBox.classList.add("hidden");
-  leaveBtn.classList.add("hidden");
-  setStatusText(false);
+    formBox.classList.remove("hidden");
+    pinActionBox.classList.add("hidden");
+    leaveBtn.classList.add("hidden");
+    setStatusText(false);
 
-  db.ref("seats/" + code).off();
-  db.ref("onlineUsers/" + id).off();
-  db.ref("seatLeases/" + code).off();
+    db.ref("seats/" + code).off();
+    db.ref("onlineUsers/" + id).off();
+    db.ref("seatLeases/" + code).off();
 
-  await db.ref(`weeklyHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
-  await db.ref(`dailyHours/${getTodayIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
-  await db.ref(`monthlyHours/${getMonthIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
-  await db.ref(`allTimeHours/${code}`).transaction(v => (v || 0) + sessionDuration);
+    await db.ref(`weeklyHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
+    await db.ref(`dailyHours/${getTodayIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
+    await db.ref(`monthlyHours/${getMonthIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
+    await db.ref(`allTimeHours/${code}`).transaction(v => (v || 0) + sessionDuration);
 
-  await db.ref("seatLeases/" + code).transaction((cur) => {
-    if (!cur || (liveToken && cur.sessionToken === liveToken)) return null;
-    return cur;
-  }).catch(() => {});
-  await db.ref("seats/" + code).transaction((cur) => {
-    if (!cur || (liveToken && cur.sessionToken === liveToken)) return null;
-    return cur;
-  }).catch(() => {});
-  await db.ref("onlineUsers/" + id).transaction((cur) => {
-    if (!cur || (liveToken && cur.sessionToken === liveToken)) return null;
-    return cur;
-  }).catch(() => {});
+    await db.ref("seatLeases/" + code).transaction((cur) => {
+      if (!cur || (liveToken && cur.sessionToken === liveToken)) return null;
+      return cur;
+    }).catch(() => {});
+    await db.ref("seats/" + code).transaction((cur) => {
+      if (!cur || (liveToken && cur.sessionToken === liveToken)) return null;
+      return cur;
+    }).catch(() => {});
+    await db.ref("onlineUsers/" + id).transaction((cur) => {
+      if (!cur || (liveToken && cur.sessionToken === liveToken)) return null;
+      return cur;
+    }).catch(() => {});
 
-  db.ref("attendance").push({
-    name: name,
-    code: code,
-    action: auto ? "terminated" : "leave",
-    time: Date.now(),
-    sessionDuration,
-    start: Date.now() - sessionDuration,
-    reason: auto ? "page-close" : reason
-  });
-
-  if (wasInCourse) {
     db.ref("attendance").push({
       name: name,
       code: code,
-      action: "course-leave",
+      action: auto ? "terminated" : "leave",
       time: Date.now(),
       sessionDuration,
-      reason: auto ? "tab-closed" : "manual-leave"
+      start: Date.now() - sessionDuration,
+      reason: auto ? "stale-session-sweep" : reason
     });
-  }
 
-  toast(auto ? "Session closed after leaving or closing the tab." : "Workspace link destroyed successfully.", "info");
-  clearActiveSessionStorage();
-  renderLessonsUI();
+    toast(auto ? "Session closed after the browser stopped sending heartbeats." : "Workspace link destroyed successfully.", "info");
+    clearActiveSessionStorage();
+    updateCourseActionButton();
+    renderLessonsUI();
+  } finally {
+    isSessionTeardownInProgress = false;
+  }
 }
 
 
 function listenToActiveKicks(userId) {
 
   db.ref("onlineUsers/" + userId).on("value", (snap) => {
+    if (isSessionTeardownInProgress) return;
     if (!snap.exists() && currentUser) {
       leaveRoom(true, "removed");
     }
@@ -1555,6 +1664,7 @@ function listenToActiveKicks(userId) {
 
 function listenToSeatLease(code) {
   db.ref("seatLeases/" + code).on("value", (snap) => {
+    if (isSessionTeardownInProgress) return;
     if (!currentUser) return;
     const lease = snap.val();
     if (!lease || lease.sessionToken !== currentSessionToken) {
@@ -1657,8 +1767,19 @@ async function openCourseEmbedWindow() {
   });
 
   startSessionHeartbeat();
+  updateCourseActionButton();
+  focusDefaultCourseAction();
   renderLessonsUI();
   window.open("https://dugsiiye.com/dashboard/student", "_blank");
+}
+
+async function handleCourseActionButtonClick() {
+  if (!currentUser) return;
+  if (currentUser.inCourse) {
+    await leaveCourse(false, "manual-course-leave");
+    return;
+  }
+  await openCourseEmbedWindow();
 }
 
 function triggerTitleDangerAlert(buyerText, vendorText) {
@@ -1675,7 +1796,7 @@ function triggerTitleDangerAlert(buyerText, vendorText) {
   }, 500);
 }
 
-btnTriggerEnterCourseEmbed.addEventListener("click", openCourseEmbedWindow);
+btnTriggerEnterCourseEmbed.addEventListener("click", handleCourseActionButtonClick);
 
 // ==========================================================================
 // BROADCAST PANEL CONTROLLER
@@ -1991,16 +2112,7 @@ attendanceHeaderBtn.addEventListener("click", () => {
   }
 });
 
-function handlePageExit() {
-  if (!currentUser) return;
-  sessionStorage.setItem("pending_exit_session", JSON.stringify({
-    code: currentUser.code,
-    id: currentUser.id,
-    name: currentUser.name,
-    at: Date.now()
-  }));
-  leaveRoom(true, "page-close");
-}
+function handlePageExit() {}
 
 if (btnOpenAttendanceReportModal) {
   btnOpenAttendanceReportModal.addEventListener('click', () => openAttendanceReportModal(currentUser ? 'user' : 'admin'));
@@ -2609,6 +2721,8 @@ async function bootstrapApplicationWorkspaceRuntime() {
       leaveBtn.classList.remove("hidden");
       pinActionBox.classList.remove("hidden");
       setStatusText(true, currentUser.code, currentUser.name);
+      updateCourseActionButton();
+      focusDefaultCourseAction();
 
       startTimer();
       syncPersonalAccumulatedTime(currentUser.code);
