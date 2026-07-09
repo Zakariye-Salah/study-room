@@ -16,6 +16,14 @@
   <div class="falling-dots-container" id="fallingDotsCanvas"></div>
   <div id="toastContainer"></div>
 
+  <div id="welcomePopupOverlay" class="welcome-popup-overlay hidden" aria-live="polite" aria-atomic="true">
+    <div class="welcome-popup-card">
+      <div class="welcome-popup-badge"><i class="bi bi-stars"></i> Welcome</div>
+      <h2 id="welcomePopupTitle">Welcome</h2>
+      <p id="welcomePopupBody">Study Room Pro</p>
+    </div>
+  </div>
+
   <div class="app-container">
     
     <!-- HEADER NAVBAR -->
@@ -215,6 +223,7 @@
         <div id="adminPanel" class="admin-dashboard-panel hidden animated-fade">
           <div class="admin-header">
             <h3><i class="bi bi-speedometer2"></i> Operations Control</h3>
+            <button id="adminMoreBtn" class="action-btn neutral-btn compact-btn hidden"><i class="bi bi-three-dots"></i> More</button>
             <button id="adminLogoutBtn" class="action-btn danger-btn compact-btn"><i class="bi bi-power"></i> Disconnect</button>
           </div>
           <div id="adminSeatsDashboard" class="admin-dashboard-grid-list"></div>
@@ -253,11 +262,24 @@
         <!-- MODERNIZED ACCORDION ATTENDANCE TRACKER -->
         <div class="accordion-attendance-wrapper">
           <button id="attendanceHeaderBtn" class="accordion-header-trigger">
-            <span><i class="bi bi-clipboard-check"></i> Attendance Logs (Last 5 Events)</span>
+            <span><i class="bi bi-clipboard-check"></i> Attendance Logs</span>
             <i id="attendanceChevron" class="bi bi-chevron-down transition-rotation"></i>
           </button>
           <div id="attendanceContent" class="accordion-panel-content hidden">
             <div id="attendanceList" class="attendance-logs-flexbox"></div>
+            <div class="attendance-log-controls">
+              <div class="attendance-log-controls-inner">
+                <label for="attendanceLogLimitSelect"><i class="bi bi-funnel"></i> Live log rows</label>
+                <select id="attendanceLogLimitSelect">
+                  <option value="5" selected>5 rows</option>
+                  <option value="15">15 rows</option>
+                  <option value="25">25 rows</option>
+                  <option value="35">35 rows</option>
+                  <option value="50">50 rows</option>
+                </select>
+              </div>
+              <button id="btnOpenAttendanceReportModal" class="action-btn safety-btn compact-btn hidden"><i class="bi bi-graph-up-arrow"></i> Open Your Report</button>
+            </div>
           </div>
         </div>
       </section>
@@ -375,6 +397,72 @@
       </div>
     </div>
   </div>
+
+
+  <!-- ATTENDANCE REPORT MODAL -->
+  <div id="attendanceReportModalOverlay" class="modal-blur-overlay hidden">
+    <div class="modal-window scale-animation attendance-report-window" style="max-width: 980px; width: 100%;">
+      <div class="modal-header">
+        <h3><i class="bi bi-bar-chart-line-fill text-primary"></i> Attendance & Course Report</h3>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <button id="btnDownloadAttendancePdf" class="action-btn neutral-btn compact-btn"><i class="bi bi-download"></i> PDF</button>
+          <button id="closeAttendanceReportModalBtn" class="modal-close-x">&times;</button>
+        </div>
+      </div>
+      <div class="modal-body attendance-report-body">
+        <div class="report-controls-grid">
+          <div>
+            <label>Range</label>
+            <select id="attendanceReportRangeSelect">
+              <option value="today" selected>Today</option>
+              <option value="week">This Week</option>
+              <option value="month">This Month</option>
+              <option value="year">This Year</option>
+            </select>
+          </div>
+          <div>
+            <label>User</label>
+            <select id="attendanceReportUserSelect">
+              <option value="all" selected>All Users</option>
+              <option value="01">Eng Abuukar</option>
+              <option value="02">Eng Osman</option>
+              <option value="03">Eng Zaki</option>
+              <option value="04">Eng Abdi</option>
+              <option value="05">Eng Hassan</option>
+            </select>
+          </div>
+          <div>
+            <label>Show last</label>
+            <select id="attendanceReportLimitSelect">
+              <option value="10" selected>10 records</option>
+              <option value="20">20 records</option>
+              <option value="30">30 records</option>
+              <option value="50">50 records</option>
+              <option value="all">All records</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="attendanceReportSummaryGrid" class="report-summary-grid"></div>
+
+        <div class="report-panels-grid">
+          <div class="report-panel-box">
+            <div class="report-panel-title"><i class="bi bi-clock-history"></i> Sessions</div>
+            <div id="attendanceReportSessionsList" class="report-scroll-list"></div>
+          </div>
+          <div class="report-panel-box">
+            <div class="report-panel-title"><i class="bi bi-trophy-fill"></i> Best Users</div>
+            <div id="attendanceReportTopUsersList" class="report-scroll-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="app-footer">
+    <div>Copyright © Study Room Pro</div>
+    <div>Version 2.001</div>
+  </footer>
 
   <!-- CONFIRMATION MODAL OVERLAY -->
   <div id="confirmationModalOverlay" class="modal-blur-overlay hidden">
