@@ -125,6 +125,19 @@ const lessonComposerTitle = document.getElementById("lessonComposerTitle");
 const premiumUserCard = document.getElementById("premiumUserCard");
 const lblPremiumUserName = document.getElementById("lblPremiumUserName");
 const lblPremiumUserSeat = document.getElementById("lblPremiumUserSeat");
+const adminMoreBtn = document.getElementById("adminMoreBtn");
+const btnOpenAttendanceReportModal = document.getElementById("btnOpenAttendanceReportModal");
+const attendanceReportModalOverlay = document.getElementById("attendanceReportModalOverlay");
+const closeAttendanceReportModalBtn = document.getElementById("closeAttendanceReportModalBtn");
+const btnDownloadAttendancePdf = document.getElementById("btnDownloadAttendancePdf");
+const attendanceReportRangeSelect = document.getElementById("attendanceReportRangeSelect");
+const attendanceReportUserSelect = document.getElementById("attendanceReportUserSelect");
+const attendanceReportLimitSelect = document.getElementById("attendanceReportLimitSelect");
+const attendanceReportSessionsList = document.getElementById("attendanceReportSessionsList");
+const attendanceReportTopUsersList = document.getElementById("attendanceReportTopUsersList");
+const attendanceReportSummaryGrid = document.getElementById("attendanceReportSummaryGrid");
+const courseAttendanceList = document.getElementById("courseAttendanceList");
+const attendanceLogLimitSelect = document.getElementById("attendanceLogLimitSelect");
 
 // ==========================================================================
 // STATE MANAGEMENT ENGINE
@@ -142,6 +155,38 @@ let activeBroadcastsRef = null;
 
 let activeRecapFilter = localStorage.getItem("recaps_active_language") || "html";
 let targetEditLessonId = null;
+let currentCourseSessionId = null;
+let sessionHeartbeatInterval = null;
+let activeAttendanceReportRange = "today";
+let activeAttendanceReportUser = "all";
+let activeAttendanceReportLimit = 10;
+const ACTIVE_PRESENCE_GRACE_MS = 10000;
+const HEARTBEAT_INTERVAL_MS = 5000;
+const COURSE_SESSION_COLLECTION = "courseSessions";
+
+let activeAttendanceEventsCache = [];
+let liveAttendanceLogLimit = parseInt(localStorage.getItem("attendance_log_limit") || "5", 10);
+let attendanceRefreshInterval = null;
+let staleSessionMonitorInterval = null;
+const ATTENDANCE_REFRESH_INTERVAL_MS = 2000;
+const STALE_SESSION_SWEEP_INTERVAL_MS = 2500;
+
+const JOIN_WELCOME_MESSAGES = [
+  "Welcome aboard — great progress starts here.",
+  "You are in the right place to build something new.",
+  "Today is a good day to learn one more thing.",
+  "Your workspace is ready — let us keep moving forward.",
+  "Stay focused and enjoy the journey.",
+  "Small steps now become big results later.",
+  "Nice to see you here — keep the momentum going.",
+  "Let us make this session count.",
+  "New seat, new progress, new results.",
+  "Welcome to Study Room Pro — let us learn something new."
+];
+
+let currentDeviceId = localStorage.getItem("device_id") || "";
+let currentTabId = sessionStorage.getItem("active_tab_id") || "";
+let currentSessionToken = sessionStorage.getItem("active_session_token") || "";
 
 const MOTIVATION_QUOTES = [
   "Errors and bugs are validation evidence that you are stretching operational capability boundaries. ⚙️",
@@ -152,6 +197,9 @@ const MOTIVATION_QUOTES = [
 ];
 let typingTimerInstance = null;
 let phraseRotationIntervalInstance = null;
+
+currentDeviceId = getOrCreateDeviceId();
+currentTabId = getOrCreateTabId();
 
 // ==========================================================================
 // TOAST NOTIFICATIONS DISPATCH
@@ -177,6 +225,25 @@ function toast(msg, type = "info") {
     div.classList.remove("show");
     setTimeout(() => div.remove(), 400);
   }, 4000);
+}
+
+function showJoinWelcomePopup(name, code) {
+  const overlay = document.getElementById("welcomePopupOverlay");
+  const title = document.getElementById("welcomePopupTitle");
+  const body = document.getElementById("welcomePopupBody");
+  if (!overlay || !title || !body) return;
+
+  const message = JOIN_WELCOME_MESSAGES[Math.floor(Math.random() * JOIN_WELCOME_MESSAGES.length)];
+  title.innerHTML = `Welcome <span>${escapeHtml(name)}</span>`;
+  body.innerHTML = `<strong>Seat ${escapeHtml(code)}</strong><br><span>Study Room Pro</span><br>${escapeHtml(message)}`;
+  overlay.classList.remove("hidden");
+  overlay.classList.add("show");
+
+  clearTimeout(window.__welcomePopupTimer);
+  window.__welcomePopupTimer = setTimeout(() => {
+    overlay.classList.remove("show");
+    setTimeout(() => overlay.classList.add("hidden"), 260);
+  }, 3000);
 }
 
 // ==========================================================================
@@ -310,7 +377,278 @@ function formatLiveSeconds(ms) {
   return `${minutes}m ${secs}s`;
 }
 
+function pad2(num) {
+  return String(num).padStart(2, '0');
+}
+
+function formatClockDateTime(timestamp) {
+  const d = new Date(timestamp);
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const startOfYesterday = startOfToday - 86400000;
+  const stampDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  if (stampDay === startOfToday) return `Today ${time}`;
+  if (stampDay === startOfYesterday) return `Yesterday ${time}`;
+  const day = pad2(d.getDate());
+  const month = d.toLocaleDateString([], { month: 'short' });
+  return `${day}/${month} ${time}`;
+}
+
+function formatSessionDuration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) ms = 0;
+  const totalMinutes = Math.floor(ms / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours <= 0) return `${minutes}m`;
+  return `${hours}:${pad2(minutes)}m`;
+}
+
+function getRangeBounds(range) {
+  const now = new Date();
+  const end = new Date(now);
+  end.setHours(23, 59, 59, 999);
+  const start = new Date(now);
+  if (range === 'week') {
+    const shift = (start.getDay() + 1) % 7;
+    start.setDate(start.getDate() - shift);
+    start.setHours(0, 0, 0, 0);
+    return { start: start.getTime(), end: end.getTime() };
+  }
+  if (range === 'month') {
+    start.setDate(1);
+    start.setHours(0, 0, 0, 0);
+    return { start: start.getTime(), end: end.getTime() };
+  }
+  if (range === 'year') {
+    start.setMonth(0, 1);
+    start.setHours(0, 0, 0, 0);
+    return { start: start.getTime(), end: end.getTime() };
+  }
+  start.setHours(0, 0, 0, 0);
+  return { start: start.getTime(), end: end.getTime() };
+}
+
+function isTimestampInSelectedRange(timestamp, range) {
+  const { start, end } = getRangeBounds(range);
+  return timestamp >= start && timestamp <= end;
+}
+
+function isPresenceFresh(user) {
+  if (!user) return false;
+  const lastSeen = user.lastSeen || user.heartbeatAt || user.start || 0;
+  return (Date.now() - lastSeen) <= ACTIVE_PRESENCE_GRACE_MS;
+}
+
+function createStableId(prefix) {
+  try {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return `${prefix}_${window.crypto.randomUUID()}`;
+    }
+  } catch (_) {}
+  return `${prefix}_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`;
+}
+
+function getOrCreateDeviceId() {
+  let deviceId = localStorage.getItem("device_id");
+  if (!deviceId) {
+    deviceId = createStableId("dev");
+    localStorage.setItem("device_id", deviceId);
+  }
+  return deviceId;
+}
+
+function getOrCreateTabId() {
+  let tabId = sessionStorage.getItem("active_tab_id");
+  if (!tabId) {
+    tabId = createStableId("tab");
+    sessionStorage.setItem("active_tab_id", tabId);
+  }
+  return tabId;
+}
+
+function clearActiveSessionStorage() {
+  sessionStorage.removeItem("active_session_token");
+  localStorage.removeItem("active_session_token");
+  localStorage.removeItem("active_user");
+}
+
+function buildPresencePayload(extra = {}) {
+  if (!currentUser) return null;
+  return {
+    ...currentUser,
+    ...extra,
+    lastSeen: Date.now(),
+    heartbeatAt: Date.now(),
+    deviceId: currentDeviceId,
+    tabId: currentTabId,
+    sessionToken: currentSessionToken,
+    inCourse: !!currentUser.inCourse,
+    courseEnteredAt: currentUser.courseEnteredAt || 0,
+    activeCourseName: currentUser.activeCourseName || ""
+  };
+}
+
+function isLeaseFresh(lease) {
+  if (!lease) return false;
+  const marker = lease.heartbeatAt || lease.lastSeen || lease.start || 0;
+  return lease.sessionToken && (Date.now() - marker) <= ACTIVE_PRESENCE_GRACE_MS;
+}
+
+function getPresenceMapFromSeatsSnapshot(seats = {}) {
+  const map = {};
+  Object.keys(seats || {}).forEach(code => {
+    const seat = seats[code] || {};
+    map[code] = {
+      fresh: isPresenceFresh(seat),
+      inCourse: !!seat.inCourse,
+      name: seat.name || "",
+      code
+    };
+  });
+  return map;
+}
+
+function isLeaveAction(action = "") {
+  const value = String(action || "").toLowerCase();
+  return value.startsWith("leave") || value.includes("terminated") || value.includes("expired");
+}
+
+function buildResolvedAttendanceEvents(events = [], presenceMap = {}, now = Date.now()) {
+  const ordered = events.filter(Boolean).slice().sort((a, b) => (a.time || 0) - (b.time || 0));
+  const resolved = [];
+  const openRooms = new Map();
+  const openCourses = new Map();
+
+  ordered.forEach((event) => {
+    const code = event.code || "--";
+    const action = String(event.action || "");
+    if (action === "join") {
+      openRooms.set(code, event);
+      resolved.push(event);
+      return;
+    }
+    if (action === "course-enter") {
+      openCourses.set(code, event);
+      resolved.push(event);
+      return;
+    }
+    if (action === "course-leave") {
+      openCourses.delete(code);
+      resolved.push(event);
+      return;
+    }
+    if (isLeaveAction(action)) {
+      openRooms.delete(code);
+      resolved.push(event);
+      return;
+    }
+    resolved.push(event);
+  });
+
+  const synthesizeRoomExit = (joinEvent, reason = "auto-synced") => ({
+    name: joinEvent.name || "Unknown",
+    code: joinEvent.code || "--",
+    action: "terminated",
+    time: now,
+    reason,
+    sessionDuration: Math.max(0, now - (joinEvent.time || now))
+  });
+
+  const synthesizeCourseExit = (courseEvent, reason = "auto-synced") => ({
+    name: courseEvent.name || "Unknown",
+    code: courseEvent.code || "--",
+    action: "course-leave",
+    time: now,
+    reason,
+    sessionDuration: Math.max(0, now - (courseEvent.time || now)),
+    courseName: courseEvent.courseName || "Full Stack AI Engineer"
+  });
+
+  for (const [code, joinEvent] of openRooms.entries()) {
+    if (presenceMap?.[code]?.fresh) continue;
+    const courseEvent = openCourses.get(code);
+    if (courseEvent) {
+      resolved.push(synthesizeCourseExit(courseEvent));
+      openCourses.delete(code);
+    }
+    resolved.push(synthesizeRoomExit(joinEvent));
+  }
+
+  return resolved.slice().sort((a, b) => (a.time || 0) - (b.time || 0));
+}
+
+function buildStaleSessionSummary(seatData = {}, leaseData = null) {
+  const now = Date.now();
+  const code = seatData.code || leaseData?.seat || leaseData?.code || "--";
+  const name = seatData.name || leaseData?.name || "Unknown";
+  const ownerId = seatData.id || leaseData?.ownerId || seatData.ownerId || seatData.userId || "";
+  const sessionStart = seatData.start || leaseData?.start || now;
+  const sessionDuration = Math.max(0, now - sessionStart);
+  const courseStart = seatData.courseEnteredAt || leaseData?.courseEnteredAt || 0;
+  const activeCourseName = seatData.activeCourseName || leaseData?.activeCourseName || "Full Stack AI Engineer";
+  return { now, code, name, ownerId, sessionStart, sessionDuration, courseStart, activeCourseName };
+}
+
+async function closeStalePresenceSession(seatData, leaseData = null) {
+  if (!seatData || !seatData.code || !seatData.sessionToken) return false;
+  if (isPresenceFresh(seatData) || seatData.exitLoggedAt) return false;
+
+  const { now, code, name, ownerId, sessionStart, sessionDuration, courseStart, activeCourseName } = buildStaleSessionSummary(seatData, leaseData);
+  const hasCourse = !!seatData.inCourse || !!leaseData?.inCourse || !!courseStart;
+
+  if (hasCourse) {
+    try {
+      const courseSnap = await db.ref(COURSE_SESSION_COLLECTION).orderByChild("code").equalTo(code).get();
+      const sessions = courseSnap.val() || {};
+      const activeIds = Object.keys(sessions).filter(id => {
+        const s = sessions[id] || {};
+        return !s.end || s.status === "active";
+      });
+      const targetId = activeIds.sort((a, b) => (sessions[b].start || 0) - (sessions[a].start || 0))[0];
+      if (targetId) {
+        await db.ref(`${COURSE_SESSION_COLLECTION}/${targetId}`).update({
+          end: now,
+          duration: Math.max(0, now - (sessions[targetId].start || courseStart || now)),
+          status: "terminated",
+          endLabel: formatClockDateTime(now)
+        }).catch(() => {});
+      }
+    } catch (_) {}
+  }
+
+  await db.ref("attendance").push({
+    name,
+    code,
+    action: "terminated",
+    time: now,
+    sessionDuration,
+    start: sessionStart,
+    reason: "stale-session-sweep"
+  });
+
+  if (hasCourse) {
+    await db.ref("attendance").push({
+      name,
+      code,
+      action: "course-leave",
+      time: now,
+      sessionDuration: Math.max(0, now - (courseStart || sessionStart)),
+      reason: "stale-session-sweep",
+      courseName: activeCourseName
+    });
+  }
+
+  const removals = [];
+  removals.push(db.ref(`seats/${code}`).remove().catch(() => {}));
+  if (ownerId) removals.push(db.ref(`onlineUsers/${ownerId}`).remove().catch(() => {}));
+  removals.push(db.ref(`seatLeases/${code}`).remove().catch(() => {}));
+  await Promise.all(removals);
+  return true;
+}
+
 // ==========================================================================
+
 // SESSION MANAGEMENT TIMERS
 // ==========================================================================
 function startTimer() {
@@ -320,6 +658,567 @@ function startTimer() {
     const currentSessionMs = Date.now() - currentUser.start;
     timerBox.innerText = formatLiveSeconds(currentSessionMs);
   }, 1000);
+}
+
+
+function refreshAllPresenceHeartbeats() {
+  if (!currentUser || !currentSessionToken) return;
+  const payload = buildPresencePayload();
+  if (!payload) return;
+
+  db.ref(`seatLeases/${currentUser.code}`).transaction((current) => {
+    if (current && current.sessionToken && current.sessionToken !== currentSessionToken) {
+      return;
+    }
+    return {
+      seat: currentUser.code,
+      name: currentUser.name,
+      ownerId: currentUser.id,
+      deviceId: currentDeviceId,
+      tabId: currentTabId,
+      sessionToken: currentSessionToken,
+      inCourse: !!currentUser.inCourse,
+      activeCourseName: currentUser.activeCourseName || "",
+      courseEnteredAt: currentUser.courseEnteredAt || 0,
+      start: currentUser.start || Date.now(),
+      lastSeen: Date.now(),
+      heartbeatAt: Date.now()
+    };
+  }).catch(() => {});
+
+  db.ref(`seats/${currentUser.code}`).update(payload).catch(() => {});
+  db.ref(`onlineUsers/${currentUser.id}`).update(payload).catch(() => {});
+}
+
+function startSessionHeartbeat() {
+  clearInterval(sessionHeartbeatInterval);
+  refreshAllPresenceHeartbeats();
+  sessionHeartbeatInterval = setInterval(refreshAllPresenceHeartbeats, HEARTBEAT_INTERVAL_MS);
+}
+
+function stopSessionHeartbeat() {
+  clearInterval(sessionHeartbeatInterval);
+  sessionHeartbeatInterval = null;
+}
+
+async function finalizeActiveCourseSession(reason = "leave") {
+  if (!currentUser || !currentCourseSessionId) return;
+  const endTime = Date.now();
+  const startTime = currentUser.courseEnteredAt || endTime;
+  const duration = Math.max(0, endTime - startTime);
+  await db.ref(`${COURSE_SESSION_COLLECTION}/${currentCourseSessionId}`).update({
+    end: endTime,
+    duration,
+    status: reason,
+    endLabel: formatClockDateTime(endTime)
+  }).catch(() => {});
+  currentCourseSessionId = null;
+}
+
+function buildRoomSessionsFromAttendance(events) {
+  const openSessions = {};
+  const sessions = [];
+  events.forEach(event => {
+    if (!event || !event.time) return;
+    if (event.action === 'join') {
+      openSessions[event.code] = { name: event.name, code: event.code, start: event.time };
+      return;
+    }
+    if (String(event.action || '').startsWith('leave') || String(event.action || '').includes('expired') || String(event.action || '').includes('terminated')) {
+      const open = openSessions[event.code];
+      if (open) {
+        sessions.push({ ...open, end: event.time, duration: Math.max(0, event.time - open.start), action: event.action });
+        delete openSessions[event.code];
+      }
+    }
+  });
+  return sessions;
+}
+
+function buildCourseSessions(events, presenceMap = {}, now = Date.now()) {
+  return events
+    .filter(Boolean)
+    .map(item => {
+      const start = item.start || item.time || 0;
+      let end = item.end || 0;
+      let duration = item.duration || 0;
+      let status = item.status || 'active';
+      const code = item.code || '--';
+      const isFresh = !!presenceMap?.[code]?.fresh;
+      if ((!end || end <= 0 || status === 'active') && !isFresh) {
+        end = end || now;
+        duration = duration || Math.max(0, end - start);
+        status = 'terminated';
+      }
+      return {
+        id: item.id,
+        name: item.name || 'Unknown',
+        code,
+        start,
+        end,
+        duration,
+        courseName: item.courseName || item.activeCourseName || 'Full Stack AI Engineer',
+        status,
+        startLabel: item.startLabel || formatClockDateTime(start),
+        endLabel: item.endLabel || (end ? formatClockDateTime(end) : '—')
+      };
+    })
+    .sort((a, b) => b.start - a.start);
+}
+
+function formatAttendanceActionLabel(event) {
+  const name = escapeHtml(event.name || 'Unknown');
+  const code = escapeHtml(event.code || '--');
+  const nameHtml = `<strong class="clean-att-name">${name}</strong>`;
+  const seatHtml = `<span class="clean-att-seat-pill">Seat ${code}</span>`;
+  const timeStr = formatClockDateTime(event.time || Date.now());
+  let body = '';
+  let icon = 'bi-clock';
+  let iconClass = 'icon-leave';
+
+  if (event.action === 'join') {
+    icon = 'bi-box-arrow-in-right';
+    iconClass = 'icon-join';
+    body = `${nameHtml} checked into workspace slot ${seatHtml}`;
+  } else if (event.action === 'course-enter') {
+    icon = 'bi-mortarboard-fill';
+    iconClass = 'icon-join';
+    body = `${nameHtml} entered the course ${seatHtml}`;
+  } else if (event.action === 'course-leave') {
+    icon = 'bi-laptop';
+    iconClass = 'icon-leave';
+    const durationText = event.sessionDuration ? formatSessionDuration(event.sessionDuration) : '0m';
+    body = `${nameHtml} left the course ${seatHtml} <span class="clean-att-duration-pill">${durationText}</span>`;
+  } else {
+    const isAutoEx = String(event.action || '').includes('expired') || String(event.reason || '').includes('page-close') || String(event.reason || '').includes('tab-closed') || String(event.reason || '').includes('removed') || String(event.reason || '').includes('auto-synced');
+    icon = isAutoEx ? 'bi-hourglass-bottom' : 'bi-box-arrow-left';
+    iconClass = 'icon-leave';
+    body = `${nameHtml} terminated workspace assignment ${seatHtml}`;
+    if (event.reason) {
+      body += ` <span class="clean-att-duration-pill">${escapeHtml(event.reason)}</span>`;
+    }
+  }
+
+  return { body, icon, iconClass, timeStr };
+}
+
+function renderAttendanceRow(event) {
+  const rowBlock = document.createElement("div");
+  rowBlock.className = "clean-attendance-row";
+  const data = formatAttendanceActionLabel(event);
+  rowBlock.innerHTML = `
+    <div class="clean-att-left flex-alignment-gap">
+      <div class="clean-att-icon ${data.iconClass}"><i class="bi ${data.icon}"></i></div>
+      <div>${data.body}</div>
+    </div>
+    <div class="clean-att-time"><i class="bi bi-clock"></i> ${data.timeStr}</div>
+  `;
+  return rowBlock;
+}
+
+function renderAttendanceRows(targetEl, events, limit) {
+  if (!targetEl) return;
+  targetEl.innerHTML = '';
+  events
+    .slice()
+    .sort((a, b) => (b.time || 0) - (a.time || 0))
+    .slice(0, limit)
+    .forEach(event => targetEl.appendChild(renderAttendanceRow(event)));
+}
+
+async function refreshAttendanceViews(options = {}) {
+  const { silentReportRefresh = false } = options;
+  try {
+    const [attendanceSnap, seatsSnap] = await Promise.all([
+      db.ref('attendance').get(),
+      db.ref('seats').get()
+    ]);
+    const presenceMap = getPresenceMapFromSeatsSnapshot(seatsSnap.val() || {});
+    const rawEvents = Object.values(attendanceSnap.val() || {});
+    activeAttendanceEventsCache = buildResolvedAttendanceEvents(rawEvents, presenceMap);
+    renderAttendanceRows(attendanceList, activeAttendanceEventsCache, liveAttendanceLogLimit);
+
+    if (attendanceReportModalOverlay && !attendanceReportModalOverlay.classList.contains('hidden')) {
+      await renderAttendanceReportModal({ silent: silentReportRefresh });
+    }
+  } catch (_) {}
+}
+
+function aggregateTopUsers(sessionList) {
+  const map = new Map();
+  sessionList.forEach(session => {
+    const key = session.code;
+    const prev = map.get(key) || { name: session.name, code: session.code, totalMs: 0, sessions: 0 };
+    prev.totalMs += session.duration || 0;
+    prev.sessions += 1;
+    map.set(key, prev);
+  });
+  return [...map.values()].sort((a, b) => b.totalMs - a.totalMs);
+}
+
+async function renderAttendanceReportModal(options = {}) {
+  if (!attendanceReportModalOverlay) return;
+  const isSilent = !!options.silent;
+  if (!isSilent) {
+    attendanceReportSessionsList.innerHTML = '<div style="padding:12px; color:var(--text-secondary); font-size:12px;">Loading attendance report...</div>';
+    attendanceReportTopUsersList.innerHTML = '';
+    attendanceReportSummaryGrid.innerHTML = '';
+  }
+
+  const [attendanceSnap, courseSnap, seatsSnap] = await Promise.all([
+    db.ref('attendance').get(),
+    db.ref(COURSE_SESSION_COLLECTION).get(),
+    db.ref('seats').get()
+  ]);
+
+  const presenceMap = getPresenceMapFromSeatsSnapshot(seatsSnap.val() || {});
+  const rawAttendanceEvents = Object.values(attendanceSnap.val() || {}).sort((a, b) => (a.time || 0) - (b.time || 0));
+  const attendanceEvents = buildResolvedAttendanceEvents(rawAttendanceEvents, presenceMap);
+  const roomSessions = buildRoomSessionsFromAttendance(attendanceEvents);
+  const courseSessions = buildCourseSessions(Object.values(courseSnap.val() || {}), presenceMap);
+
+  const range = activeAttendanceReportRange;
+  const userFilter = activeAttendanceReportUser;
+  const limitValue = activeAttendanceReportLimit === 'all' ? Infinity : Math.max(1, parseInt(activeAttendanceReportLimit || 20, 10));
+  const seatMatch = (item) => userFilter === 'all' || item.code === userFilter || item.name === userFilter;
+
+  const filteredRoomSessions = roomSessions.filter(item => isTimestampInSelectedRange(item.start, range) && seatMatch(item));
+  const filteredCourseSessions = courseSessions.filter(item => isTimestampInSelectedRange(item.start, range) && seatMatch(item));
+
+  const limitedRoomSessions = Number.isFinite(limitValue) ? filteredRoomSessions.slice(0, limitValue) : filteredRoomSessions;
+  const limitedCourseSessions = Number.isFinite(limitValue) ? filteredCourseSessions.slice(0, limitValue) : filteredCourseSessions;
+
+  const roomRank = aggregateTopUsers(filteredRoomSessions);
+  const courseRank = aggregateTopUsers(filteredCourseSessions);
+
+  const totalRoomMs = filteredRoomSessions.reduce((sum, s) => sum + (s.duration || 0), 0);
+  const totalCourseMs = filteredCourseSessions.reduce((sum, s) => sum + (s.duration || 0), 0);
+  const totalJoinEvents = attendanceEvents.filter(e => e.action === 'join' && isTimestampInSelectedRange(e.time || 0, range) && seatMatch(e)).length;
+  const totalCourseEnterEvents = attendanceEvents.filter(e => e.action === 'course-enter' && isTimestampInSelectedRange(e.time || 0, range) && seatMatch(e)).length;
+  const totalRoomLeaveEvents = attendanceEvents.filter(e => (String(e.action || '').startsWith('leave') || String(e.action || '').includes('terminated') || String(e.action || '').includes('expired')) && isTimestampInSelectedRange(e.time || 0, range) && seatMatch(e)).length;
+  const totalCourseLeaveEvents = attendanceEvents.filter(e => e.action === 'course-leave' && isTimestampInSelectedRange(e.time || 0, range) && seatMatch(e)).length;
+  const bestRoomUser = roomRank[0];
+  const bestCourseUser = courseRank[0];
+
+  attendanceReportSummaryGrid.innerHTML = `
+    <div class="report-summary-card"><span>Total room time</span><strong>${formatSessionDuration(totalRoomMs)}</strong></div>
+    <div class="report-summary-card"><span>Total course time</span><strong>${formatSessionDuration(totalCourseMs)}</strong></div>
+    <div class="report-summary-card"><span>Join events</span><strong>${totalJoinEvents}</strong></div>
+    <div class="report-summary-card"><span>Course entered</span><strong>${totalCourseEnterEvents}</strong></div>
+    <div class="report-summary-card"><span>Room left/terminated</span><strong>${totalRoomLeaveEvents}</strong></div>
+    <div class="report-summary-card"><span>Course left</span><strong>${totalCourseLeaveEvents}</strong></div>
+    <div class="report-summary-card"><span>Best room user</span><strong>${bestRoomUser ? `${escapeHtml(bestRoomUser.name)} (${formatSessionDuration(bestRoomUser.totalMs)})` : 'No data'}</strong></div>
+    <div class="report-summary-card"><span>Best course user</span><strong>${bestCourseUser ? `${escapeHtml(bestCourseUser.name)} (${formatSessionDuration(bestCourseUser.totalMs)})` : 'No data'}</strong></div>
+  `;
+
+  if (courseSessions.length === 0 && roomSessions.length === 0) {
+    attendanceReportSessionsList.innerHTML = '<div style="text-align:center; color:var(--text-secondary); font-size:12px; padding:12px;">No attendance history found in this filter.</div>';
+  } else {
+    const rows = [];
+    limitedCourseSessions.forEach(session => {
+      rows.push(`
+        <div class="report-session-row">
+          <div>
+            <div class="report-session-title">${escapeHtml(session.name)} <span class="report-session-seat">Seat ${escapeHtml(session.code)}</span></div>
+            <div class="report-session-sub">Course: ${escapeHtml(session.courseName)} • ${session.startLabel} → ${session.end ? session.endLabel : 'Active'} • Total time: ${formatSessionDuration(session.duration || (Date.now() - session.start))}</div>
+          </div>
+          <span class="report-session-pill course">Course</span>
+        </div>
+      `);
+    });
+    limitedRoomSessions.forEach(session => {
+      rows.push(`
+        <div class="report-session-row">
+          <div>
+            <div class="report-session-title">${escapeHtml(session.name)} <span class="report-session-seat">Seat ${escapeHtml(session.code)}</span></div>
+            <div class="report-session-sub">Room: ${formatClockDateTime(session.start)} → ${formatClockDateTime(session.end)} • Total time: ${formatSessionDuration(session.duration)}</div>
+          </div>
+          <span class="report-session-pill room">Room</span>
+        </div>
+      `);
+    });
+    attendanceReportSessionsList.innerHTML = rows.join('') || '<div style="text-align:center; color:var(--text-secondary); font-size:12px; padding:12px;">No rows for the selected filter.</div>';
+  }
+
+  const rankHtml = [];
+  const rankSource = courseRank.length ? courseRank : roomRank;
+  rankSource.slice(0, 10).forEach((user, index) => {
+    rankHtml.push(`
+      <div class="report-rank-row">
+        <div class="report-rank-index">#${index + 1}</div>
+        <div class="report-rank-name">${escapeHtml(user.name)} <span>Seat ${escapeHtml(user.code)}</span></div>
+        <div class="report-rank-ms">${formatSessionDuration(user.totalMs)}</div>
+      </div>
+    `);
+  });
+  attendanceReportTopUsersList.innerHTML = rankHtml.join('') || '<div style="text-align:center; color:var(--text-secondary); font-size:12px; padding:12px;">No ranking data yet.</div>';
+
+  window.__lastAttendanceReportData = {
+    range,
+    userFilter,
+    totalRoomMs,
+    totalCourseMs,
+    totalJoinEvents,
+    totalCourseEnterEvents,
+    totalRoomLeaveEvents,
+    totalCourseLeaveEvents,
+    roomSessions: limitedRoomSessions,
+    courseSessions: limitedCourseSessions,
+    topUsers: rankSource.slice(0, 10)
+  };
+
+  return window.__lastAttendanceReportData;
+}
+
+function openAttendanceReportModal(mode = 'admin') {
+  if (!currentUser && !isAdminAuthenticated) {
+    toast('Please join the room first to view reports.', 'warning');
+    return;
+  }
+
+  attendanceReportModalOverlay.classList.remove('hidden');
+  if (attendanceReportRangeSelect) attendanceReportRangeSelect.value = 'today';
+  if (attendanceReportUserSelect) {
+    if (mode === 'user' && currentUser) {
+      attendanceReportUserSelect.innerHTML = `<option value="${currentUser.code}" selected>${escapeHtml(currentUser.name)} (Seat ${escapeHtml(currentUser.code)})</option>`;
+      attendanceReportUserSelect.value = currentUser.code;
+      attendanceReportUserSelect.disabled = true;
+      attendanceReportUserSelect.setAttribute('aria-readonly', 'true');
+    } else {
+      attendanceReportUserSelect.innerHTML = `
+        <option value="all" selected>All Users</option>
+        <option value="01">Eng Abuukar</option>
+        <option value="02">Eng Osman</option>
+        <option value="03">Eng Zaki</option>
+        <option value="04">Eng Abdi</option>
+        <option value="05">Eng Hassan</option>
+      `;
+      attendanceReportUserSelect.value = 'all';
+      attendanceReportUserSelect.disabled = false;
+      attendanceReportUserSelect.removeAttribute('aria-readonly');
+    }
+  }
+  if (attendanceReportLimitSelect) attendanceReportLimitSelect.value = mode === 'user' ? '10' : '20';
+  activeAttendanceReportRange = 'today';
+  activeAttendanceReportUser = mode === 'user' && currentUser ? currentUser.code : 'all';
+  activeAttendanceReportLimit = mode === 'user' ? '10' : '20';
+  renderAttendanceReportModal();
+}
+
+function closeAttendanceReportModal() {
+  attendanceReportModalOverlay.classList.add('hidden');
+  if (attendanceReportUserSelect) {
+    attendanceReportUserSelect.disabled = false;
+    attendanceReportUserSelect.removeAttribute('aria-readonly');
+  }
+}
+
+function escapePdfText(text) {
+  return String(text || '')
+    .split('\\').join('\\\\')
+    .split('(').join('\\(')
+    .split(')').join('\\)');
+}
+
+function buildPdfPages(lines) {
+  const NL = String.fromCharCode(10);
+  const pageWidth = 595.28;
+  const pageHeight = 841.89;
+  const margin = 34;
+  const contentWidth = pageWidth - margin * 2;
+  const pageItems = [];
+
+  const maxRows = 24;
+  for (let i = 0; i < lines.length; i += maxRows) {
+    pageItems.push(lines.slice(i, i + maxRows));
+  }
+
+  const objects = [];
+  const addObject = (content) => {
+    objects.push(content);
+    return objects.length;
+  };
+
+  const fontObj = addObject('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  const boldFontObj = addObject('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>');
+  const contentIndexes = [];
+
+  const esc = escapePdfText;
+
+  pageItems.forEach((pageLines, pageIndex) => {
+    const c = [];
+    const pushText = (x, y, size, text, bold = false, rgb = [0.16, 0.22, 0.35]) => {
+      c.push('BT');
+      c.push(`${bold ? '/F2' : '/F1'} ${size} Tf`);
+      c.push(`${rgb[0]} ${rgb[1]} ${rgb[2]} rg`);
+      c.push(`${x} ${y} Td`);
+      c.push(`(${esc(text)}) Tj`);
+      c.push('ET');
+    };
+    const drawRect = (x, y, w, h, rgb) => {
+      c.push(`${rgb[0]} ${rgb[1]} ${rgb[2]} rg`);
+      c.push(`${x} ${y} ${w} ${h} re f`);
+    };
+
+    let y = pageHeight - margin - 18;
+    // Header band
+    drawRect(margin, pageHeight - 72, contentWidth, 34, [0.08, 0.18, 0.45]);
+    pushText(margin + 14, pageHeight - 50, 16, 'Study Room Pro', true, [1, 1, 1]);
+    pushText(pageWidth - margin - 160, pageHeight - 50, 10, `Page ${pageIndex + 1}`, true, [0.86, 0.92, 1]);
+    y -= 26;
+
+    pageLines.forEach((line, idx) => {
+      const trimmed = String(line || '').trim();
+      if (!trimmed) {
+        y -= 8;
+        return;
+      }
+
+      if (trimmed === 'Attendance & Course Report') {
+        pushText(margin, y, 14, trimmed, true, [0.08, 0.18, 0.45]);
+        y -= 18;
+        return;
+      }
+
+      if (trimmed === 'Top users' || trimmed === 'Course sessions' || trimmed === 'Room sessions') {
+        drawRect(margin, y - 4, contentWidth, 16, [0.15, 0.47, 0.96]);
+        pushText(margin + 8, y + 7, 10, trimmed.toUpperCase(), true, [1, 1, 1]);
+        y -= 22;
+        return;
+      }
+
+      const isTableRow = trimmed.includes(' | ');
+      if (isTableRow) {
+        const bg = idx % 2 === 0 ? [0.95, 0.97, 1] : [0.91, 0.94, 0.99];
+        drawRect(margin, y - 5, contentWidth, 18, bg);
+        const textColor = trimmed.startsWith('Room |') ? [0.10, 0.55, 0.28] : trimmed.startsWith('Course |') ? [0.15, 0.32, 0.70] : [0.15, 0.17, 0.22];
+        pushText(margin + 8, y + 6, 9.8, trimmed, false, textColor);
+        y -= 20;
+        return;
+      }
+
+      const titleLike = trimmed === 'Study Room Pro' || trimmed.startsWith('Range:') || trimmed.startsWith('User:') || trimmed.startsWith('Generated:') || trimmed.startsWith('Total ') || trimmed.startsWith('Join events:') || trimmed.startsWith('Course entered:') || trimmed.startsWith('Room left/terminated:') || trimmed.startsWith('Course left:');
+      if (titleLike) {
+        pushText(margin, y, trimmed === 'Study Room Pro' ? 13 : 10, trimmed, trimmed === 'Study Room Pro' || trimmed.startsWith('Total '), trimmed.startsWith('Total ') ? [0.08, 0.18, 0.45] : [0.18, 0.22, 0.28]);
+        y -= trimmed.startsWith('Total ') ? 16 : 14;
+        return;
+      }
+
+      pushText(margin, y, 9.6, trimmed, false, [0.18, 0.22, 0.28]);
+      y -= 13;
+    });
+
+    const content = c.join(NL);
+    contentIndexes.push(addObject(`<< /Length ${content.length} >>${NL}stream${NL}${content}${NL}endstream`));
+  });
+
+  const pagesObj = addObject('<< /Type /Pages /Kids [] /Count 0 >>');
+  const catalogObj = addObject(`<< /Type /Catalog /Pages ${pagesObj} 0 R >>`);
+  const pageIndexes = [];
+  pageItems.forEach((_, idx) => {
+    pageIndexes.push(addObject(`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 ${fontObj} 0 R /F2 ${boldFontObj} 0 R >> >> /Contents ${contentIndexes[idx]} 0 R >>`));
+  });
+  objects[pagesObj - 1] = `<< /Type /Pages /Kids [${pageIndexes.map(n => `${n} 0 R`).join(' ')}] /Count ${pageIndexes.length} >>`;
+
+  let pdf = '%PDF-1.4' + NL;
+  const offsets = [0];
+  objects.forEach((obj, idx) => {
+    offsets.push(pdf.length);
+    pdf += `${idx + 1} 0 obj${NL}${obj}${NL}endobj${NL}`;
+  });
+  const xrefPos = pdf.length;
+  pdf += `xref${NL}0 ${objects.length + 1}${NL}0000000000 65535 f ${NL}`;
+  for (let i = 1; i <= objects.length; i++) {
+    pdf += `${String(offsets[i]).padStart(10, '0')} 00000 n ${NL}`;
+  }
+  pdf += `trailer${NL}<< /Size ${objects.length + 1} /Root ${catalogObj} 0 R >>${NL}startxref${NL}${xrefPos}${NL}%%EOF`;
+  return new Blob([pdf], { type: 'application/pdf' });
+}
+
+function buildAttendancePdfLines() {
+  const report = window.__lastAttendanceReportData || {};
+  const rangeLabel = {
+    today: "Today",
+    week: "This Week",
+    month: "This Month",
+    year: "This Year"
+  }[activeAttendanceReportRange] || activeAttendanceReportRange;
+  const userLabel = activeAttendanceReportUser === "all" ? "All Users" : `Seat ${activeAttendanceReportUser}`;
+
+  const lines = [
+    'Study Room Pro',
+    'Attendance & Course Report',
+    `Range: ${rangeLabel}`,
+    `User: ${userLabel}`,
+    `Generated: ${new Date().toLocaleString()}`,
+    '',
+    `Total room time: ${formatSessionDuration(report.totalRoomMs || 0)}`,
+    `Total course time: ${formatSessionDuration(report.totalCourseMs || 0)}`,
+    `Join events: ${report.totalJoinEvents || 0}`,
+    `Course entered: ${report.totalCourseEnterEvents || 0}`,
+    `Room left/terminated: ${report.totalRoomLeaveEvents || 0}`,
+    `Course left: ${report.totalCourseLeaveEvents || 0}`,
+    '',
+    'Top users'
+  ];
+  (report.topUsers || []).forEach((u, idx) => {
+    lines.push(`${String(idx + 1).padStart(2, '0')}. ${u.name} | Seat ${u.code} | ${formatSessionDuration(u.totalMs || 0)}`);
+  });
+  lines.push('', 'Course sessions');
+  (report.courseSessions || []).forEach(s => {
+    lines.push(`Course | ${s.name} | Seat ${s.code} | ${s.startLabel} -> ${s.end ? s.endLabel : 'Active'} | ${formatSessionDuration(s.duration || 0)}`);
+  });
+  lines.push('', 'Room sessions');
+  (report.roomSessions || []).forEach(s => {
+    lines.push(`Room | ${s.name} | Seat ${s.code} | ${formatClockDateTime(s.start)} -> ${formatClockDateTime(s.end)} | ${formatSessionDuration(s.duration || 0)}`);
+  });
+  return lines;
+}
+
+function downloadAttendanceReportPdf() {
+  if (!window.__lastAttendanceReportData) {
+    renderAttendanceReportModal().then(() => downloadAttendanceReportPdf());
+    return;
+  }
+  const blob = buildPdfPages(buildAttendancePdfLines());
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `study-room-attendance-${new Date().toISOString().slice(0, 10)}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+async function sweepStaleSessions() {
+  try {
+    const seatsSnap = await db.ref("seats").get();
+    const seats = seatsSnap.val() || {};
+    for (const [code, seatData] of Object.entries(seats)) {
+      if (!seatData || !seatData.sessionToken) continue;
+      if (isPresenceFresh(seatData) || seatData.exitLoggedAt) continue;
+      await closeStalePresenceSession({ ...seatData, code });
+    }
+  } catch (_) {}
+}
+
+function startAttendanceAutoRefresh() {
+  if (attendanceRefreshInterval) clearInterval(attendanceRefreshInterval);
+  attendanceRefreshInterval = setInterval(() => {
+    if (!currentUser && !isAdminAuthenticated) return;
+    if (!attendanceContent || !attendanceReportModalOverlay) return;
+    const attendanceOpen = !attendanceContent.classList.contains('hidden');
+    const reportOpen = !attendanceReportModalOverlay.classList.contains('hidden');
+    if (attendanceOpen || reportOpen) refreshAttendanceViews({ silentReportRefresh: true });
+  }, ATTENDANCE_REFRESH_INTERVAL_MS);
+}
+
+function startStaleSessionMonitor() {
+  if (staleSessionMonitorInterval) clearInterval(staleSessionMonitorInterval);
+  staleSessionMonitorInterval = setInterval(() => {
+    sweepStaleSessions();
+  }, STALE_SESSION_SWEEP_INTERVAL_MS);
 }
 
 // ==========================================================================
@@ -365,17 +1264,21 @@ function setStatusText(joined, seat = "", name = "") {
   if (joined) {
     userStatus.innerHTML = `<i class="bi bi-check-circle-fill"></i> Joined`;
     userStatus.className = "status-badge active";
-    seat03AccessLink.classList.remove("hidden"); 
-    
+    seat03AccessLink.classList.remove("hidden");
+    if (leaveBtn) leaveBtn.classList.remove("hidden");
+    if (btnOpenAttendanceReportModal) btnOpenAttendanceReportModal.classList.remove("hidden");
+
     lblPremiumUserName.innerText = name;
     lblPremiumUserSeat.innerText = `Seat Assignment: ${seat}`;
     premiumUserCard.classList.remove("hidden");
-    
+
     initiateDynamicPremiumRotator(name);
   } else {
     userStatus.innerHTML = `<i class="bi bi-dash-circle"></i> Not joined`;
     userStatus.className = "status-badge";
     seat03AccessLink.classList.add("hidden");
+    if (leaveBtn) leaveBtn.classList.add("hidden");
+    if (btnOpenAttendanceReportModal) btnOpenAttendanceReportModal.classList.add("hidden");
     premiumUserCard.classList.add("hidden");
     initiateDynamicPremiumRotator("Guest");
   }
@@ -452,6 +1355,7 @@ function renderRotatorTextFrame(username) {
 // ==========================================================================
 // CORE SEAT TRANSACTIONS & CLEAN CLOSED TAB PROTECTION
 // ==========================================================================
+
 async function joinRoom(name, code, pin) {
   const normalizedCode = code.trim();
   const targetSeat = SEATS[normalizedCode];
@@ -475,7 +1379,7 @@ async function joinRoom(name, code, pin) {
     toast("Invalid credentials code access PIN.", "error");
     return;
   }
-  
+
   if (targetSeat.name.toLowerCase() !== name.trim().toLowerCase()) {
     toast("Assigned identity parameters mismatch.", "error");
     return;
@@ -483,12 +1387,22 @@ async function joinRoom(name, code, pin) {
 
   const seatRef = db.ref("seats/" + normalizedCode);
   const snap = await seatRef.get();
-  if (snap.exists()) {
+  if (snap.exists() && isPresenceFresh(snap.val())) {
     toast("Resource collision: Seat node is already occupied.", "error");
     return;
   }
 
+  const leaseRef = db.ref(`seatLeases/${normalizedCode}`);
+  const leaseSnap = await leaseRef.get();
+  if (leaseSnap.exists() && isLeaseFresh(leaseSnap.val()) && leaseSnap.val().sessionToken !== currentSessionToken) {
+    toast("Resource collision: Seat node is already leased by another active session.", "error");
+    return;
+  }
+
   const userId = "u_" + Math.random().toString(36).slice(2);
+  currentSessionToken = createStableId("sess");
+  sessionStorage.setItem("active_session_token", currentSessionToken);
+  localStorage.setItem("active_session_token", currentSessionToken);
   currentUser = {
     id: userId,
     name: targetSeat.name,
@@ -496,7 +1410,12 @@ async function joinRoom(name, code, pin) {
     start: Date.now(),
     inCourse: false,
     courseEnteredAt: 0,
-    activeCourseName: ""
+    activeCourseName: "",
+    lastSeen: Date.now(),
+    heartbeatAt: Date.now(),
+    deviceId: currentDeviceId,
+    tabId: currentTabId,
+    sessionToken: currentSessionToken
   };
 
   if (rememberMe.checked) {
@@ -512,19 +1431,22 @@ async function joinRoom(name, code, pin) {
     localStorage.setItem("recaps_active_language", activeRecapFilter);
   }
 
-  seatRef.onDisconnect().remove(); 
-  db.ref("onlineUsers/" + userId).onDisconnect().remove(); 
-  
-  const attendanceDisconnectRef = db.ref("attendance").push();
-  attendanceDisconnectRef.onDisconnect().set({
-    name: targetSeat.name,
-    code: normalizedCode,
-    action: "leave (closed window)",
-    time: firebase.database.ServerValue.TIMESTAMP
-  });
-
   await seatRef.set(currentUser);
   await db.ref("onlineUsers/" + userId).set(currentUser);
+  await leaseRef.set({
+    seat: normalizedCode,
+    name: targetSeat.name,
+    ownerId: userId,
+    deviceId: currentDeviceId,
+    tabId: currentTabId,
+    sessionToken: currentSessionToken,
+    inCourse: false,
+    activeCourseName: "",
+    courseEnteredAt: 0,
+    start: currentUser.start,
+    lastSeen: Date.now(),
+    heartbeatAt: Date.now()
+  });
 
   db.ref("attendance").push({
     name: targetSeat.name,
@@ -537,62 +1459,106 @@ async function joinRoom(name, code, pin) {
   formBox.classList.add("hidden");
   pinActionBox.classList.remove("hidden");
   setStatusText(true, normalizedCode, targetSeat.name);
+  showJoinWelcomePopup(targetSeat.name, normalizedCode);
 
   startTimer();
+  startSessionHeartbeat();
   syncPersonalAccumulatedTime(normalizedCode);
   localStorage.setItem("active_user", userId);
-  listenToActiveKicks(userId);
   renderLessonsUI();
 
-  clearTimeout(autoRemovalTimeoutInstance);
-  autoRemovalTimeoutInstance = setTimeout(() => {
-    leaveRoom(true); 
-  }, SESSION_LIMIT);
+  window.addEventListener('pagehide', handlePageExit, { once: true });
+  window.addEventListener('beforeunload', handlePageExit, { once: true });
 }
 
-async function leaveRoom(auto = false) {
+
+async function leaveRoom(auto = false, reason = "leave") {
   if (!currentUser) return;
 
   const code = currentUser.code;
   const id = currentUser.id;
   const name = currentUser.name;
   const sessionDuration = Date.now() - currentUser.start;
+  const wasInCourse = !!currentUser.inCourse;
+  const liveToken = currentSessionToken;
+
+  if (wasInCourse) {
+    await finalizeActiveCourseSession(auto ? "terminated" : "leave");
+  }
 
   currentUser = null;
   stopTimer();
+  stopSessionHeartbeat();
 
   formBox.classList.remove("hidden");
   pinActionBox.classList.add("hidden");
+  leaveBtn.classList.add("hidden");
   setStatusText(false);
 
-  db.ref("seats/" + code).onDisconnect().cancel();
-  db.ref("onlineUsers/" + id).onDisconnect().cancel();
-  db.ref("attendance").onDisconnect().cancel();
+  db.ref("seats/" + code).off();
+  db.ref("onlineUsers/" + id).off();
+  db.ref("seatLeases/" + code).off();
 
   await db.ref(`weeklyHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
   await db.ref(`dailyHours/${getTodayIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
   await db.ref(`monthlyHours/${getMonthIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
   await db.ref(`allTimeHours/${code}`).transaction(v => (v || 0) + sessionDuration);
 
-  await db.ref("seats/" + code).remove();
-  await db.ref("onlineUsers/" + id).remove();
+  await db.ref("seatLeases/" + code).transaction((cur) => {
+    if (!cur || (liveToken && cur.sessionToken === liveToken)) return null;
+    return cur;
+  }).catch(() => {});
+  await db.ref("seats/" + code).transaction((cur) => {
+    if (!cur || (liveToken && cur.sessionToken === liveToken)) return null;
+    return cur;
+  }).catch(() => {});
+  await db.ref("onlineUsers/" + id).transaction((cur) => {
+    if (!cur || (liveToken && cur.sessionToken === liveToken)) return null;
+    return cur;
+  }).catch(() => {});
 
   db.ref("attendance").push({
     name: name,
     code: code,
-    action: auto ? "expired time" : "leave",
-    time: Date.now()
+    action: auto ? "terminated" : "leave",
+    time: Date.now(),
+    sessionDuration,
+    start: Date.now() - sessionDuration,
+    reason: auto ? "page-close" : reason
   });
 
-  toast(auto ? "Session runtime quota spent. Disconnected automatically." : "Workspace link destroyed successfully.", "info");
-  localStorage.removeItem("active_user");
+  if (wasInCourse) {
+    db.ref("attendance").push({
+      name: name,
+      code: code,
+      action: "course-leave",
+      time: Date.now(),
+      sessionDuration,
+      reason: auto ? "tab-closed" : "manual-leave"
+    });
+  }
+
+  toast(auto ? "Session closed after leaving or closing the tab." : "Workspace link destroyed successfully.", "info");
+  clearActiveSessionStorage();
   renderLessonsUI();
 }
 
+
 function listenToActiveKicks(userId) {
+
   db.ref("onlineUsers/" + userId).on("value", (snap) => {
     if (!snap.exists() && currentUser) {
-      leaveRoom(true);
+      leaveRoom(true, "removed");
+    }
+  });
+}
+
+function listenToSeatLease(code) {
+  db.ref("seatLeases/" + code).on("value", (snap) => {
+    if (!currentUser) return;
+    const lease = snap.val();
+    if (!lease || lease.sessionToken !== currentSessionToken) {
+      leaveRoom(true, "lease-lost");
     }
   });
 }
@@ -600,20 +1566,25 @@ function listenToActiveKicks(userId) {
 // ==========================================================================
 // COURSE ACCESSIBILITY CONTEXT ENGINE
 // ==========================================================================
+
 async function openCourseEmbedWindow() {
   if (!currentUser) return;
-  
-  const snap = await db.ref("onlineUsers").get();
+  if (currentUser.inCourse) {
+    toast("You are already in course mode.", "warning");
+    return;
+  }
+
+  const snap = await db.ref("seatLeases").get();
   let currentOccupantName = "";
   let currentOccupantSeat = "";
   let courseOccupied = false;
-  
+
   if (snap.exists()) {
     Object.values(snap.val()).forEach(u => {
-      if (u.inCourse && u.id !== currentUser.id) {
+      if (u.inCourse && u.ownerId !== currentUser.id && isLeaseFresh(u)) {
         courseOccupied = true;
         currentOccupantName = u.name;
-        currentOccupantSeat = u.code;
+        currentOccupantSeat = u.seat || u.code;
       }
     });
   }
@@ -627,19 +1598,66 @@ async function openCourseEmbedWindow() {
   currentUser.inCourse = true;
   currentUser.activeCourseName = "Full Stack AI Engineer";
   currentUser.courseEnteredAt = Date.now();
-  
+  currentUser.lastSeen = Date.now();
+  currentUser.heartbeatAt = Date.now();
+  currentCourseSessionId = db.ref(COURSE_SESSION_COLLECTION).push().key;
+  await db.ref(`seatLeases/${currentUser.code}`).transaction((current) => {
+    if (current && current.sessionToken && current.sessionToken !== currentSessionToken) {
+      return;
+    }
+    return {
+      seat: currentUser.code,
+      name: currentUser.name,
+      ownerId: currentUser.id,
+      deviceId: currentDeviceId,
+      tabId: currentTabId,
+      sessionToken: currentSessionToken,
+      inCourse: true,
+      activeCourseName: currentUser.activeCourseName,
+      courseEnteredAt: currentUser.courseEnteredAt,
+      start: currentUser.start,
+      lastSeen: Date.now(),
+      heartbeatAt: Date.now()
+    };
+  });
+
+  await db.ref(`${COURSE_SESSION_COLLECTION}/${currentCourseSessionId}`).set({
+    name: currentUser.name,
+    code: currentUser.code,
+    courseName: currentUser.activeCourseName,
+    start: currentUser.courseEnteredAt,
+    startLabel: formatClockDateTime(currentUser.courseEnteredAt),
+    end: 0,
+    duration: 0,
+    status: "active"
+  });
+
   await db.ref("onlineUsers/" + currentUser.id).update({
     inCourse: true,
-    activeCourseName: "Full Stack AI Engineer",
-    courseEnteredAt: currentUser.courseEnteredAt
+    activeCourseName: currentUser.activeCourseName,
+    courseEnteredAt: currentUser.courseEnteredAt,
+    lastSeen: currentUser.lastSeen,
+    heartbeatAt: currentUser.heartbeatAt
   });
-  
+
   await db.ref("seats/" + currentUser.code).update({
     inCourse: true,
-    activeCourseName: "Full Stack AI Engineer",
-    courseEnteredAt: currentUser.courseEnteredAt
+    activeCourseName: currentUser.activeCourseName,
+    courseEnteredAt: currentUser.courseEnteredAt,
+    lastSeen: currentUser.lastSeen,
+    heartbeatAt: currentUser.heartbeatAt
   });
-  
+
+  db.ref("attendance").push({
+    name: currentUser.name,
+    code: currentUser.code,
+    action: "course-enter",
+    time: Date.now(),
+    courseName: currentUser.activeCourseName
+  });
+
+  startSessionHeartbeat();
+  renderLessonsUI();
   window.open("https://dugsiiye.com/dashboard/student", "_blank");
 }
 
@@ -973,10 +1991,55 @@ attendanceHeaderBtn.addEventListener("click", () => {
   }
 });
 
+function handlePageExit() {
+  if (!currentUser) return;
+  sessionStorage.setItem("pending_exit_session", JSON.stringify({
+    code: currentUser.code,
+    id: currentUser.id,
+    name: currentUser.name,
+    at: Date.now()
+  }));
+  leaveRoom(true, "page-close");
+}
+
+if (btnOpenAttendanceReportModal) {
+  btnOpenAttendanceReportModal.addEventListener('click', () => openAttendanceReportModal(currentUser ? 'user' : 'admin'));
+}
+if (adminMoreBtn) {
+  adminMoreBtn.addEventListener('click', () => openAttendanceReportModal('admin'));
+}
+if (closeAttendanceReportModalBtn) closeAttendanceReportModalBtn.addEventListener('click', closeAttendanceReportModal);
+if (btnDownloadAttendancePdf) btnDownloadAttendancePdf.addEventListener('click', downloadAttendanceReportPdf);
+if (attendanceReportModalOverlay) {
+  attendanceReportModalOverlay.addEventListener('click', (e) => {
+    if (e.target === attendanceReportModalOverlay) closeAttendanceReportModal();
+  });
+}
+[attendanceReportRangeSelect, attendanceReportUserSelect, attendanceReportLimitSelect].forEach(el => {
+  if (el) {
+    el.addEventListener("change", () => {
+      if (el === attendanceReportRangeSelect) activeAttendanceReportRange = el.value;
+      if (el === attendanceReportUserSelect) activeAttendanceReportUser = el.value;
+      if (el === attendanceReportLimitSelect) activeAttendanceReportLimit = el.value;
+      renderAttendanceReportModal();
+    });
+  }
+});
+
+if (attendanceLogLimitSelect) {
+  attendanceLogLimitSelect.value = String(liveAttendanceLogLimit);
+  attendanceLogLimitSelect.addEventListener("change", () => {
+    liveAttendanceLogLimit = Math.max(5, parseInt(attendanceLogLimitSelect.value || "5", 10));
+    localStorage.setItem("attendance_log_limit", String(liveAttendanceLogLimit));
+    if (activeAttendanceEventsCache.length) renderAttendanceRows(attendanceList, activeAttendanceEventsCache, liveAttendanceLogLimit);
+  });
+}
+
 function initRealtimeDatabaseListeners() {
   db.ref("seats").on("value", (snap) => {
     const activeSeats = snap.val() || {};
-    let count = Object.keys(activeSeats).length;
+    const freshSeats = Object.values(activeSeats).filter(u => isPresenceFresh(u));
+    let count = freshSeats.length;
     onlineCount.innerText = count;
 
     let isOccupied = false;
@@ -984,7 +2047,7 @@ function initRealtimeDatabaseListeners() {
     let occupantSeatLabel = "";
     let entryTimestamp = 0;
 
-    Object.values(activeSeats).forEach(u => {
+    freshSeats.forEach(u => {
       if (u.inCourse) {
         isOccupied = true;
         userCourseName = u.activeCourseName || "Full Stack AI Engineer";
@@ -1004,16 +2067,17 @@ function initRealtimeDatabaseListeners() {
   db.ref("onlineUsers").on("value", (snap) => {
     usersList.innerHTML = "";
     const users = snap.val() || {};
-    
-    if (Object.keys(users).length === 0) {
+    const freshUsers = Object.values(users).filter(u => isPresenceFresh(u));
+
+    if (freshUsers.length === 0) {
       usersList.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-secondary); font-size:13px;">No developers currently active in workspace.</div>';
       return;
     }
 
-    Object.values(users).forEach(u => {
+    freshUsers.forEach(u => {
       const card = document.createElement("div");
       card.className = "user-card";
-      
+
       let badgeHtml = "";
       if (u.inCourse) {
         let pathTime = u.courseEnteredAt ? new Date(u.courseEnteredAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : "";
@@ -1038,41 +2102,11 @@ function initRealtimeDatabaseListeners() {
     updateLiveCardElapsedTimers();
   });
   
-  db.ref("attendance").limitToLast(5).on("value", (snap) => {
-    attendanceList.innerHTML = "";
-    const events = snap.val() || {};
-    const sortedEvents = Object.values(events).sort((a, b) => b.time - a.time);
-
-    sortedEvents.forEach(e => {
-      const timeStr = new Date(e.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      const rowBlock = document.createElement("div");
-      rowBlock.className = "clean-attendance-row";
-
-      const nameHtml = `<strong class="clean-att-name">${escapeHtml(e.name)}</strong>`;
-      const seatHtml = `<span class="clean-att-seat-pill">Seat ${e.code}</span>`;
-
-      if (e.action === "join") {
-        rowBlock.innerHTML = `
-          <div class="clean-att-left flex-alignment-gap">
-            <div class="clean-att-icon icon-join"><i class="bi bi-box-arrow-in-right"></i></div>
-            <div>${nameHtml} checked into workspace slot ${seatHtml}</div>
-          </div>
-          <div class="clean-att-time"><i class="bi bi-clock"></i> ${timeStr}</div>
-        `;
-      } else {
-        const isAutoEx = e.action.includes("expired");
-        rowBlock.innerHTML = `
-          <div class="clean-att-left flex-alignment-gap">
-            <div class="clean-att-icon icon-leave"><i class="bi ${isAutoEx ? 'bi-hourglass-bottom' : 'bi-box-arrow-left'}"></i></div>
-            <div>${nameHtml} terminated workspace assignment ${seatHtml}</div>
-          </div>
-          <div class="clean-att-time"><i class="bi bi-clock"></i> ${timeStr}</div>
-        `;
-      }
-      attendanceList.appendChild(rowBlock);
-    });
+  db.ref("attendance").on("value", () => {
+    refreshAttendanceViews();
   });
 }
+
 
 function updateLiveCardElapsedTimers() {
   document.querySelectorAll(".live-elapsed-badge").forEach(badge => {
@@ -1141,7 +2175,9 @@ adminLoginBtn.addEventListener("click", async () => {
     adminPanel.classList.remove("hidden");
     btnToggleAdminComposer.classList.remove("hidden");
     adminAddLessonTriggerBtn.classList.remove("hidden");
-    
+    if (adminMoreBtn) adminMoreBtn.classList.remove("hidden");
+    if (btnOpenAttendanceReportModal) btnOpenAttendanceReportModal.classList.remove("hidden");
+
     buildAdminDashboardDeck();
     listenToGlobalBroadcastAlerts();
     renderLessonsUI();
@@ -1160,6 +2196,8 @@ adminLogoutBtn.addEventListener("click", async () => {
   btnToggleAdminComposer.classList.add("hidden");
   adminMessageComposerArea.classList.remove("expanded");
   adminAddLessonTriggerBtn.classList.add("hidden");
+  if (adminMoreBtn) adminMoreBtn.classList.add("hidden");
+  if (btnOpenAttendanceReportModal) btnOpenAttendanceReportModal.classList.add("hidden");
   adminLessonComposerArea.classList.remove("expanded");
   
   listenToGlobalBroadcastAlerts();
@@ -1180,9 +2218,9 @@ function buildAdminDashboardDeck() {
       <div style="font-weight:700; font-size:13px;">Seat ${code} (${config.name})</div>
       <div id="admin-seat-status-${code}" style="font-size:12px; color:var(--text-secondary);">Offline</div>
       <div style="display:flex; gap:6px; justify-content:flex-end; align-items:center;">
-        <button onclick="resetUserSecurityPin('${code}')" class="action-btn primary-btn compact-btn" style="padding:4px 8px; font-size:11px; width:auto; background-color:#2563eb;" title="Reset user pin to default setup"><i class="bi bi-arrow-counterclockwise"></i> Reset PIN</button>
-        <button id="btn-lock-${code}" onclick="toggleSeatBlock('${code}')" class="premium-btn compact-btn" style="padding:4px 8px; font-size:11px; margin:0;"><i class="bi bi-lock"></i> Lock</button>
-        <button id="btn-kick-${code}" onclick="kickSeatUser('${code}')" class="action-btn danger-btn compact-btn hidden" style="padding:4px 8px; font-size:11px; width:auto; margin:0;"><i class="bi bi-power"></i> Kick</button>
+        <button onclick="resetUserSecurityPin('${code}')" class="action-btn primary-btn compact-btn icon-only-btn" title="Reset user pin to default setup" aria-label="Reset PIN"><i class="bi bi-arrow-counterclockwise"></i></button>
+        <button id="btn-lock-${code}" onclick="toggleSeatBlock('${code}')" class="premium-btn compact-btn icon-only-btn" title="Lock seat" aria-label="Lock seat"><i class="bi bi-lock"></i></button>
+        <button id="btn-kick-${code}" onclick="kickSeatUser('${code}')" class="action-btn danger-btn compact-btn hidden icon-only-btn" title="Kick user" aria-label="Kick user"><i class="bi bi-power"></i></button>
       </div>
     `;
     adminSeatsDashboard.appendChild(row);
@@ -1211,16 +2249,12 @@ function buildAdminDashboardDeck() {
       const lockBtn = document.getElementById(`btn-lock-${code}`);
       if (!lockBtn) return;
       if (blocked[code] === true) {
-        lockBtn.innerHTML = '<i class="bi bi-unlock"></i> Unlock';
-        lockBtn.className = "action-btn warning-btn compact-btn";
+        lockBtn.innerHTML = '<i class="bi bi-unlock"></i>';
+        lockBtn.className = "action-btn warning-btn compact-btn icon-only-btn";
         lockBtn.style.width = "auto";
-        lockBtn.style.padding = "4px 8px";
-        lockBtn.style.fontSize = "11px";
       } else {
-        lockBtn.innerHTML = '<i class="bi bi-lock"></i> Lock';
-        lockBtn.className = "premium-btn compact-btn";
-        lockBtn.style.padding = "4px 8px";
-        lockBtn.style.fontSize = "11px";
+        lockBtn.innerHTML = '<i class="bi bi-lock"></i>';
+        lockBtn.className = "premium-btn compact-btn icon-only-btn";
       }
     });
   });
@@ -1236,6 +2270,7 @@ window.toggleSeatBlock = async function(code) {
   toast(`Seat ${code} configuration updated successfully.`, "success");
 };
 
+
 window.kickSeatUser = function(code) {
   if (!isAdminAuthenticated) return;
   openConfirmationModal(
@@ -1245,6 +2280,28 @@ window.kickSeatUser = function(code) {
       const snap = await db.ref(`seats/${code}`).get();
       if (snap.exists()) {
         const userData = snap.val();
+        const endTime = Date.now();
+        const duration = Math.max(0, endTime - (userData.start || endTime));
+        if (userData.inCourse) {
+          const courseSessionsSnap = await db.ref(COURSE_SESSION_COLLECTION).orderByChild('code').equalTo(code).get();
+          const courseSessions = courseSessionsSnap.val() || {};
+          const latestCourseId = Object.keys(courseSessions).sort((a, b) => (courseSessions[b].start || 0) - (courseSessions[a].start || 0))[0];
+          if (latestCourseId) {
+            await db.ref(`${COURSE_SESSION_COLLECTION}/${latestCourseId}`).update({
+              end: endTime,
+              duration: Math.max(0, endTime - (courseSessions[latestCourseId].start || endTime)),
+              status: 'admin-terminated',
+              endLabel: formatClockDateTime(endTime)
+            });
+          }
+        }
+        await db.ref("attendance").push({
+          name: userData.name,
+          code,
+          action: "terminated",
+          time: endTime,
+          sessionDuration: duration
+        });
         await db.ref(`seats/${code}`).remove();
         await db.ref(`onlineUsers/${userData.id}`).remove();
         toast(`Seat ${code} cleared by administrative command.`, "info");
@@ -1252,6 +2309,7 @@ window.kickSeatUser = function(code) {
     }
   );
 };
+
 
 // ==========================================================================
 // RECAP MATRIX CONTROLLERS 
@@ -1543,7 +2601,8 @@ async function bootstrapApplicationWorkspaceRuntime() {
   const cacheUserId = localStorage.getItem("active_user");
   if (cacheUserId) {
     const onlineSnap = await db.ref("onlineUsers/" + cacheUserId).get();
-    if (onlineSnap.exists()) {
+    const storedSessionToken = sessionStorage.getItem("active_session_token") || "";
+    if (onlineSnap.exists() && storedSessionToken && onlineSnap.val().sessionToken === storedSessionToken) {
       currentUser = onlineSnap.val();
       
       formBox.classList.add("hidden");
@@ -1554,9 +2613,7 @@ async function bootstrapApplicationWorkspaceRuntime() {
       startTimer();
       syncPersonalAccumulatedTime(currentUser.code);
       listenToActiveKicks(cacheUserId);
-
-      db.ref("seats/" + currentUser.code).onDisconnect().remove();
-      db.ref("onlineUsers/" + cacheUserId).onDisconnect().remove();
+      listenToSeatLease(currentUser.code);
       
       const sessionQuotaSpent = Date.now() - currentUser.start;
       const remainingTime = SESSION_LIMIT - sessionQuotaSpent;
@@ -1583,6 +2640,9 @@ async function bootstrapApplicationWorkspaceRuntime() {
   }
 
   initRealtimeDatabaseListeners();
+  startAttendanceAutoRefresh();
+  startStaleSessionMonitor();
+  refreshAttendanceViews();
   listenToGlobalBroadcastAlerts();
   renderLessonsUI();
 }
