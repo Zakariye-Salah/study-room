@@ -138,6 +138,10 @@ const attendanceReportTopUsersList = document.getElementById("attendanceReportTo
 const attendanceReportSummaryGrid = document.getElementById("attendanceReportSummaryGrid");
 const courseAttendanceList = document.getElementById("courseAttendanceList");
 const attendanceLogLimitSelect = document.getElementById("attendanceLogLimitSelect");
+const handRaiseBoardTitle = document.getElementById("handRaiseBoardTitle");
+const raisedHandsCount = document.getElementById("raisedHandsCount");
+const raisedHandsList = document.getElementById("raisedHandsList");
+const quickMessageRecipientLabel = document.getElementById("quickMessageRecipientLabel");
 
 // ==========================================================================
 // STATE MANAGEMENT ENGINE
@@ -150,8 +154,11 @@ let localizedUserCache = {};
 let currentSelectedTimeframe = localStorage.getItem("user_selected_timeframe") || "week";
 let pendingConfirmationAction = null;
 let activeMessageTargetUser = null;
+let activeMessageMode = "private";
 let showAllMessagesFlag = false;
 let activeBroadcastsRef = null;
+let activePrivateMessagesRef = null;
+let notificationRefreshTimeout = null;
 
 let activeRecapFilter = localStorage.getItem("recaps_active_language") || "html";
 let targetEditLessonId = null;
@@ -728,8 +735,8 @@ function updateCourseActionButton() {
 }
 
 async function leaveCourse(auto = false, reason = "manual-course-leave", opts = {}) {
-  if (!currentUser || !currentUser.inCourse || isSessionTeardownInProgress) return false;
-  const { silent = false, skipConfirm = false } = opts;
+  const { silent = false, skipConfirm = false, allowDuringTeardown = false, suppressAttendanceLog = false } = opts;
+  if (!currentUser || !currentUser.inCourse || (isSessionTeardownInProgress && !allowDuringTeardown)) return false;
 
   if (!auto && !skipConfirm) {
     return new Promise((resolve) => {
@@ -745,6 +752,7 @@ async function leaveCourse(auto = false, reason = "manual-course-leave", opts = 
     });
   }
 
+  const activeCourseName = currentUser.activeCourseName || "Full Stack AI Engineer";
   currentUser.inCourse = false;
   currentUser.activeCourseName = "";
   currentUser.courseEnteredAt = 0;
@@ -789,15 +797,17 @@ async function leaveCourse(auto = false, reason = "manual-course-leave", opts = 
     heartbeatAt: leaveTime
   }).catch(() => {});
 
-  db.ref("attendance").push({
-    name: currentUser.name,
-    code,
-    action: auto ? "terminated" : "course-leave",
-    time: leaveTime,
-    sessionDuration: Math.max(0, leaveTime - (currentUser.start || leaveTime)),
-    reason: auto ? "stale-session-sweep" : reason,
-    courseName: "Full Stack AI Engineer"
-  });
+  if (!suppressAttendanceLog) {
+    db.ref("attendance").push({
+      name: currentUser.name,
+      code,
+      action: auto ? "terminated" : "course-leave",
+      time: leaveTime,
+      sessionDuration: Math.max(0, leaveTime - (currentUser.start || leaveTime)),
+      reason: auto ? "stale-session-sweep" : reason,
+      courseName: activeCourseName
+    });
+  }
 
   if (!silent) {
     toast("You left the course successfully.", "success");
@@ -897,11 +907,27 @@ function formatAttendanceActionLabel(event) {
     iconClass = 'icon-leave';
     const durationText = event.sessionDuration ? formatSessionDuration(event.sessionDuration) : '0m';
     body = `${nameHtml} left the course ${seatHtml} <span class="clean-att-duration-pill">${durationText}</span>`;
+  } else if (event.action === 'hand-raise') {
+    icon = 'bi-hand-index-thumb';
+    iconClass = 'icon-hand-raise';
+    body = `${nameHtml} raised hand ✋ ${seatHtml}`;
+  } else if (event.action === 'hand-lower') {
+    icon = 'bi-hand-index-thumb';
+    iconClass = 'icon-hand-lower';
+    body = `${nameHtml} lowered hand ✋ ${seatHtml}`;
+  } else if (event.action === 'leave' || event.action === 'terminated') {
+    const isAutoEx = String(event.action || '').includes('expired') || String(event.reason || '').includes('page-close') || String(event.reason || '').includes('tab-closed') || String(event.reason || '').includes('removed') || String(event.reason || '').includes('auto-synced');
+    icon = isAutoEx ? 'bi-box-arrow-left' : 'bi-box-arrow-left';
+    iconClass = 'icon-leave';
+    body = `${nameHtml} left the room ${seatHtml}`;
+    if (event.reason) {
+      body += ` <span class="clean-att-duration-pill">${escapeHtml(event.reason)}</span>`;
+    }
   } else {
     const isAutoEx = String(event.action || '').includes('expired') || String(event.reason || '').includes('page-close') || String(event.reason || '').includes('tab-closed') || String(event.reason || '').includes('removed') || String(event.reason || '').includes('auto-synced');
     icon = isAutoEx ? 'bi-hourglass-bottom' : 'bi-box-arrow-left';
     iconClass = 'icon-leave';
-    body = `${nameHtml} terminated workspace assignment ${seatHtml}`;
+    body = `${nameHtml} left the room ${seatHtml}`;
     if (event.reason) {
       body += ` <span class="clean-att-duration-pill">${escapeHtml(event.reason)}</span>`;
     }
@@ -1529,7 +1555,9 @@ async function joinRoom(name, code, pin) {
     heartbeatAt: Date.now(),
     deviceId: currentDeviceId,
     tabId: currentTabId,
-    sessionToken: currentSessionToken
+    sessionToken: currentSessionToken,
+    handRaised: false,
+    handRaisedAt: 0
   };
 
   if (rememberMe.checked) {
@@ -1596,9 +1624,37 @@ async function leaveRoom(auto = false, reason = "leave") {
     const sessionDuration = Date.now() - currentUser.start;
     const liveToken = currentSessionToken;
     const wasInCourse = !!currentUser.inCourse;
+    const wasHandRaised = !!currentUser.handRaised;
+    const activeCourseName = currentUser.activeCourseName || "Full Stack AI Engineer";
+
+    if (wasHandRaised) {
+      currentUser.handRaised = false;
+      currentUser.handRaisedAt = 0;
+      const loweredPayload = buildPresencePayload({ handRaised: false, handRaisedAt: 0 });
+      await Promise.all([
+        db.ref(`onlineUsers/${id}`).update(loweredPayload).catch(() => {}),
+        db.ref(`seats/${code}`).update(loweredPayload).catch(() => {})
+      ]);
+      logHandAttendance("hand-lower", code, name, { reason: auto ? "room-leave-auto" : "room-leave" });
+    }
 
     if (wasInCourse) {
-      await leaveCourse(true, "room-leave", { silent: true, skipConfirm: true });
+      await leaveCourse(true, "room-leave", {
+        silent: true,
+        skipConfirm: true,
+        allowDuringTeardown: true,
+        suppressAttendanceLog: true
+      });
+
+      db.ref("attendance").push({
+        name,
+        code,
+        action: auto ? "terminated" : "course-leave",
+        time: Date.now(),
+        sessionDuration,
+        reason: auto ? "room-leave-auto" : "room-leave",
+        courseName: activeCourseName
+      });
     }
 
     currentUser = null;
@@ -1806,7 +1862,7 @@ headerNotificationBellBtn.addEventListener("click", (e) => {
   const isHidden = bellNotificationsDropdownPanel.classList.contains("hidden");
   if (isHidden) {
     bellNotificationsDropdownPanel.classList.remove("hidden");
-    db.ref("bellUnreadCounts/" + (currentUser ? currentUser.id : "guest")).set(0);
+    db.ref("bellUnreadCounts/" + (currentUser ? currentUser.id : (isAdminAuthenticated ? "admin" : "guest"))).set(0);
     bellUnreadCounterBadge.classList.add("hidden");
   } else {
     bellNotificationsDropdownPanel.classList.add("hidden");
@@ -1821,7 +1877,7 @@ btnToggleAdminComposer.addEventListener("click", (e) => {
 });
 
 function listenToGlobalBroadcastAlerts() {
-  const idKey = currentUser ? currentUser.id : "guest";
+  const idKey = currentUser ? currentUser.id : (isAdminAuthenticated ? "admin" : "guest");
   
   db.ref("bellUnreadCounts/" + idKey).on("value", (snap) => {
     const counts = snap.val() || 0;
@@ -1834,61 +1890,14 @@ function listenToGlobalBroadcastAlerts() {
   });
 
   if (activeBroadcastsRef) activeBroadcastsRef.off();
+  if (activePrivateMessagesRef) activePrivateMessagesRef.off();
   
   activeBroadcastsRef = db.ref("broadcastAlerts").orderByChild("timestamp");
-  activeBroadcastsRef.on("value", (snap) => {
-    bellMessagesListContainer.innerHTML = "";
-    const data = snap.val() || {};
-    
-    let entries = Object.keys(data).map(key => ({
-      id: key,
-      ...data[key]
-    })).reverse();
-    
-    if (!showAllMessagesFlag) {
-      entries = entries.slice(0, 5); 
-    }
-
-    if (entries.length === 0) {
-      bellMessagesListContainer.innerHTML = `<div class="empty-bell-fallback">No notifications found.</div>`;
-      return;
-    }
-
-    entries.forEach(m => {
-      const isOwnMessage = currentUser && currentUser.code === m.seatCode;
-      const isMsgFromAdmin = m.seatCode === "Admin";
-      
-      let cardClass = "bell-msg-item";
-      if (isMsgFromAdmin) cardClass += " warning-border";
-      else cardClass += " student-broadcast";
-      
-      let actionButtons = `<div class="bell-msg-actions">`;
-      if (isAdminAuthenticated) {
-        if (isMsgFromAdmin) {
-          actionButtons += `<a href="javascript:void(0)" onclick="editMessage(event, '${m.id}', '${escapeHtml(m.title)}', '${escapeHtml(m.body)}')" class="text-warning" title="Edit"><i class="bi bi-pencil-square"></i></a>`;
-        }
-        actionButtons += `<a href="javascript:void(0)" onclick="deleteMessage(event, '${m.id}')" class="text-danger" style="color:var(--color-danger) !important;" title="Delete"><i class="bi bi-trash"></i></a>`;
-      } else if (isOwnMessage) {
-        actionButtons += `<a href="javascript:void(0)" onclick="deleteMessage(event, '${m.id}')" class="text-danger" style="color:var(--color-danger) !important;" title="Delete"><i class="bi bi-trash"></i></a>`;
-      }
-      actionButtons += `</div>`;
-
-      const card = document.createElement("div");
-      card.className = cardClass;
-      card.innerHTML = `
-        <div class="bell-msg-meta">
-          <div>
-            <span class="bell-msg-sender"><i class="bi bi-hash"></i> ${m.seatCode === 'Admin' ? 'Admin' : 'Seat ' + m.seatCode}</span>
-            <span class="bell-msg-time" style="margin-left:8px;">${new Date(m.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-          </div>
-          ${actionButtons}
-        </div>
-        <h4 class="bell-msg-title" id="title-${m.id}">${escapeHtml(m.title)}</h4>
-        <p class="bell-msg-body" id="body-${m.id}">${escapeHtml(m.body)}</p>
-      `;
-      bellMessagesListContainer.appendChild(card);
-    });
-  });
+  activePrivateMessagesRef = db.ref("privateMessages").orderByChild("timestamp");
+  const refreshPanel = () => queueNotificationFeedRefresh();
+  activeBroadcastsRef.on("value", refreshPanel);
+  activePrivateMessagesRef.on("value", refreshPanel);
+  queueNotificationFeedRefresh();
 }
 
 window.deleteMessage = function(e, messageId) {
@@ -1899,6 +1908,7 @@ window.deleteMessage = function(e, messageId) {
     async () => {
       await db.ref("broadcastAlerts/" + messageId).remove();
       toast("Message deleted successfully!", "success");
+      queueNotificationFeedRefresh();
     }
   );
 };
@@ -1933,18 +1943,147 @@ window.editMessage = function(e, messageId, currentTitle, currentBody) {
     adminMsgTitleInput.value = "";
     adminMsgBodyInput.value = "";
     toast("Broadcast alert updated successfully!", "success");
+    queueNotificationFeedRefresh();
   };
 };
 
 function escapeHtml(str) {
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  return String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+
+function logHandAttendance(action, code, name, extras = {}) {
+  if (!code || !name) return;
+  const reason = extras.reason || (action === "hand-lower" ? "hand-lowered" : "hand-raised");
+  db.ref("attendance").push({
+    name,
+    code,
+    action,
+    time: Date.now(),
+    reason,
+    courseName: extras.courseName || ""
+  });
+}
+
+function refreshRaisedHandsBoard(users = []) {
+  if (!raisedHandsList) return;
+  const raisedHands = users.filter(u => u && u.handRaised).sort((a, b) => (b.handRaisedAt || 0) - (a.handRaisedAt || 0));
+
+  if (raisedHandsCount) raisedHandsCount.innerText = String(raisedHands.length);
+  if (handRaiseBoardTitle) {
+    if (raisedHands.length === 0) handRaiseBoardTitle.innerHTML = '<i class="bi bi-hand-index-thumb"></i> Raised Hands';
+    else if (raisedHands.length === 1) handRaiseBoardTitle.innerHTML = `${escapeHtml(raisedHands[0].name || 'Student')} Raising hand ✋️`;
+    else handRaiseBoardTitle.innerHTML = `<i class="bi bi-hand-index-thumb"></i> ${raisedHands.length} Students Raising hand ✋️`;
+  }
+
+  raisedHandsList.innerHTML = '';
+  if (raisedHands.length === 0) {
+    raisedHandsList.innerHTML = '<div class="raised-hand-empty">No one has raised a hand right now.</div>';
+    return;
+  }
+
+  raisedHands.forEach(u => {
+    const item = document.createElement('div');
+    item.className = 'raised-hand-item';
+    const sinceLabel = u.handRaisedAt ? new Date(u.handRaisedAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '';
+    item.innerHTML = `
+      <div class="raised-hand-main">
+        <div class="raised-hand-emoji">✋</div>
+        <div style="min-width:0;">
+          <div class="raised-hand-name">${escapeHtml(u.name || 'Unknown')}<span class="hand-raise-pill">Raised</span></div>
+          <div class="raised-hand-seat">Seat ${escapeHtml(u.code || '--')}</div>
+        </div>
+      </div>
+      <div class="raised-hand-time">${sinceLabel ? `Since ${sinceLabel}` : 'Just now'}</div>
+    `;
+    raisedHandsList.appendChild(item);
+  });
+}
+
+async function toggleMyHandRaise() {
+  if (!currentUser) { toast('Claim your seat first before raising your hand.', 'warning'); return; }
+  const nextState = !currentUser.handRaised;
+  const nextRaisedAt = nextState ? Date.now() : 0;
+  currentUser.handRaised = nextState;
+  currentUser.handRaisedAt = nextRaisedAt;
+  const payload = buildPresencePayload({ handRaised: nextState, handRaisedAt: nextRaisedAt });
+  await Promise.all([
+    db.ref(`onlineUsers/${currentUser.id}`).update(payload).catch(() => {}),
+    db.ref(`seats/${currentUser.code}`).update(payload).catch(() => {})
+  ]);
+  logHandAttendance(nextState ? "hand-raise" : "hand-lower", currentUser.code, currentUser.name);
+  toast(nextState ? 'You raised your hand.' : 'Your hand was lowered.', 'success');
+}
+
+function queueNotificationFeedRefresh() {
+  clearTimeout(notificationRefreshTimeout);
+  notificationRefreshTimeout = setTimeout(() => refreshNotificationFeed(), 50);
+}
+
+async function refreshNotificationFeed() {
+  if (!bellMessagesListContainer) return;
+  const [broadcastSnap, privateSnap] = await Promise.all([
+    db.ref('broadcastAlerts').get().catch(() => null),
+    db.ref('privateMessages').get().catch(() => null)
+  ]);
+  const entries = [];
+  const broadcasts = broadcastSnap && broadcastSnap.val ? (broadcastSnap.val() || {}) : {};
+  Object.keys(broadcasts).forEach(key => entries.push({ id: key, type: 'broadcast', ...broadcasts[key] }));
+  const privateMessages = privateSnap && privateSnap.val ? (privateSnap.val() || {}) : {};
+  Object.keys(privateMessages).forEach(key => {
+    const msg = privateMessages[key] || {};
+    const canSee = isAdminAuthenticated || (currentUser && (msg.fromUserId === currentUser.id || msg.toUserId === currentUser.id));
+    if (!canSee) return;
+    entries.push({ id: key, type: 'private', ...msg });
+  });
+  entries.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  const visibleEntries = showAllMessagesFlag ? entries : entries.slice(0, 5);
+  bellMessagesListContainer.innerHTML = '';
+  if (visibleEntries.length === 0) { bellMessagesListContainer.innerHTML = `<div class="empty-bell-fallback">No notifications found.</div>`; return; }
+  visibleEntries.forEach(m => {
+    const isOwnMessage = currentUser && currentUser.code === m.seatCode;
+    const isMsgFromAdmin = m.seatCode === 'Admin';
+    let cardClass = 'bell-msg-item';
+    let actionButtons = '';
+    if (m.type === 'private') cardClass += ' private-message-card';
+    else if (isMsgFromAdmin) cardClass += ' warning-border';
+    else cardClass += ' student-broadcast';
+    if (m.type === 'broadcast') {
+      actionButtons = `<div class="bell-msg-actions">`;
+      if (isAdminAuthenticated) {
+        if (isMsgFromAdmin) actionButtons += `<a href="javascript:void(0)" onclick="editMessage(event, '${m.id}', '${escapeHtml(m.title)}', '${escapeHtml(m.body)}')" class="text-warning" title="Edit"><i class="bi bi-pencil-square"></i></a>`;
+        actionButtons += `<a href="javascript:void(0)" onclick="deleteMessage(event, '${m.id}')" class="text-danger" style="color:var(--color-danger) !important;" title="Delete"><i class="bi bi-trash"></i></a>`;
+      } else if (isOwnMessage) {
+        actionButtons += `<a href="javascript:void(0)" onclick="deleteMessage(event, '${m.id}')" class="text-danger" style="color:var(--color-danger) !important;" title="Delete"><i class="bi bi-trash"></i></a>`;
+      }
+      actionButtons += `</div>`;
+    }
+    const senderLabel = m.type === 'private' ? `${escapeHtml(m.fromName || 'Unknown')} (Seat ${escapeHtml(m.fromSeatCode || '--')})` : `${m.seatCode === 'Admin' ? 'Admin' : 'Seat ' + escapeHtml(m.seatCode || '--')}`;
+    const recipientLabel = m.type === 'private' ? `<span class="private-message-tag"><i class="bi bi-send"></i> To ${escapeHtml(m.toName || (m.toSeatCode ? 'Seat ' + m.toSeatCode : 'Admin'))}</span>` : '';
+    const timeText = m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+    const card = document.createElement('div');
+    card.className = cardClass;
+    card.innerHTML = `
+      <div class="bell-msg-meta">
+        <div>
+          <span class="bell-msg-sender"><i class="bi bi-hash"></i> ${senderLabel}</span>
+          ${recipientLabel}
+          <span class="bell-msg-time" style="margin-left:8px;">${timeText}</span>
+        </div>
+        ${actionButtons}
+      </div>
+      <h4 class="bell-msg-title" id="title-${m.id}">${escapeHtml(m.title || 'Message')}</h4>
+      <p class="bell-msg-body" id="body-${m.id}">${escapeHtml(m.body || '')}</p>
+    `;
+    bellMessagesListContainer.appendChild(card);
+  });
 }
 
 btnLoadAllMessagesView.addEventListener("click", (e) => {
   e.stopPropagation();
   showAllMessagesFlag = !showAllMessagesFlag;
   btnLoadAllMessagesView.innerText = showAllMessagesFlag ? "Show Less" : "View All";
-  listenToGlobalBroadcastAlerts();
+  queueNotificationFeedRefresh();
 });
 
 btnAdminBroadcastSubmit.addEventListener("click", async (e) => {
@@ -1978,18 +2117,20 @@ btnAdminBroadcastSubmit.addEventListener("click", async (e) => {
   adminMsgTitleInput.value = "";
   adminMsgBodyInput.value = "";
   toast("Broadcast alert transmitted successfully!", "success");
+  queueNotificationFeedRefresh();
 });
 
 // ==========================================================================
 // SELECTION POPUP MESSAGING DRIVERS
 // ==========================================================================
-window.openQuickMessagingModal = async function(targetUserId, targetSeatCode) {
+window.openQuickMessagingModal = async function(targetUserId, targetSeatCode, mode = 'private') {
   if (!currentUser) {
     toast("You must claim a space seat to interact.", "error");
     return;
   }
   
   activeMessageTargetUser = { id: targetUserId, seat: targetSeatCode };
+  activeMessageMode = mode === 'global' ? 'global' : 'private';
   
   const todayId = getTodayIdentifier();
   const budgetSnap = await db.ref(`messageBudgets/${todayId}/${currentUser.id}`).get();
@@ -1999,6 +2140,23 @@ window.openQuickMessagingModal = async function(targetUserId, targetSeatCode) {
   lblRemainingMsgBudgetCounter.innerText = remaining;
   selectedQuickMessageText = "";
   
+  const modalTitleEl = quickStudentMessageModal ? quickStudentMessageModal.querySelector(".modal-header h3") : null;
+  const submitBtn = btnSubmitQuickStudentMessage;
+
+  if (activeMessageMode === 'global') {
+    if (modalTitleEl) modalTitleEl.innerHTML = '<i class="bi bi-megaphone-fill text-primary"></i> Send Global Alert';
+    if (submitBtn) submitBtn.innerText = 'Send Global Alert';
+    if (quickMessageRecipientLabel) {
+      quickMessageRecipientLabel.innerHTML = `Global status alert for all users`;
+    }
+  } else {
+    if (modalTitleEl) modalTitleEl.innerHTML = '<i class="bi bi-chat-dots-fill text-primary"></i> Send Private Message';
+    if (submitBtn) submitBtn.innerText = 'Send Private Message';
+    if (quickMessageRecipientLabel) {
+      quickMessageRecipientLabel.innerHTML = `Private message to Seat <strong>${escapeHtml(targetSeatCode || '--')}</strong>`;
+    }
+  }
+  
   document.querySelectorAll(".template-msg-pill").forEach(p => p.style.border = "1px solid var(--border-color)");
   
   quickStudentMessageModal.classList.remove("hidden");
@@ -2007,6 +2165,10 @@ window.openQuickMessagingModal = async function(targetUserId, targetSeatCode) {
 function closeQuickMessagingModalWindow() {
   quickStudentMessageModal.classList.add("hidden");
   activeMessageTargetUser = null;
+  activeMessageMode = "private";
+  const modalTitleEl = quickStudentMessageModal ? quickStudentMessageModal.querySelector(".modal-header h3") : null;
+  if (modalTitleEl) modalTitleEl.innerHTML = '<i class="bi bi-chat-dots-fill text-primary"></i> Send Quick Status Alert';
+  if (btnSubmitQuickStudentMessage) btnSubmitQuickStudentMessage.innerText = 'Send Private Message';
 }
 
 [btnCloseMessageModal, btnCancelMessageModal].forEach(b => b.addEventListener("click", closeQuickMessagingModalWindow));
@@ -2021,6 +2183,10 @@ document.querySelectorAll(".template-msg-pill").forEach(pill => {
 
 btnSubmitQuickStudentMessage.addEventListener("click", async () => {
   if (!currentUser || !activeMessageTargetUser) return;
+  
+  if (btnSubmitQuickStudentMessage) {
+    btnSubmitQuickStudentMessage.innerText = activeMessageMode === 'global' ? 'Send Global Alert' : 'Send Private Message';
+  }
   
   const todayId = getTodayIdentifier();
   const budgetRef = db.ref(`messageBudgets/${todayId}/${currentUser.id}`);
@@ -2038,28 +2204,66 @@ btnSubmitQuickStudentMessage.addEventListener("click", async () => {
     return;
   }
 
-  const broadcastPayload = {
-    title: `Status Update from ${currentUser.name} (Seat ${currentUser.code})`,
+  const nextBudget = currentUsed + 1;
+  const now = Date.now();
+
+  if (activeMessageMode === 'global') {
+    const alertPayload = {
+      type: 'broadcast',
+      title: `Status alert from ${currentUser.name} (Seat ${currentUser.code})`,
+      body: selectedQuickMessageText,
+      seatCode: currentUser.code,
+      timestamp: now
+    };
+
+    await db.ref("broadcastAlerts").push(alertPayload);
+    await budgetRef.set(nextBudget);
+
+    const usersSnap = await db.ref("onlineUsers").get().catch(() => null);
+    if (usersSnap && usersSnap.exists()) {
+      Object.keys(usersSnap.val()).forEach(uid => {
+        db.ref("bellUnreadCounts/" + uid).transaction(c => (c || 0) + 1);
+      });
+    }
+    db.ref("bellUnreadCounts/guest").transaction(c => (c || 0) + 1);
+    db.ref("bellUnreadCounts/admin").transaction(c => (c || 0) + 1);
+
+    closeQuickMessagingModalWindow();
+    toast("Global status alert sent successfully.", "success");
+    queueNotificationFeedRefresh();
+    return;
+  }
+
+  const recipientSnap = await db.ref(`onlineUsers/${activeMessageTargetUser.id}`).get().catch(() => null);
+  const recipientData = recipientSnap && recipientSnap.val ? (recipientSnap.val() || {}) : {};
+  const messagePayload = {
+    type: 'private',
+    title: `Private message from ${currentUser.name} (Seat ${currentUser.code})`,
     body: selectedQuickMessageText,
-    seatCode: currentUser.code,
-    timestamp: Date.now()
+    fromUserId: currentUser.id,
+    fromName: currentUser.name,
+    fromSeatCode: currentUser.code,
+    toUserId: activeMessageTargetUser.id,
+    toName: recipientData.name || activeMessageTargetUser.seat || 'Admin',
+    toSeatCode: activeMessageTargetUser.seat,
+    timestamp: now
   };
 
-  await db.ref("broadcastAlerts").push(broadcastPayload);
-  await budgetRef.set(currentUsed + 1);
+  await db.ref("privateMessages").push(messagePayload);
+  await budgetRef.set(nextBudget);
 
-  const usersSnap = await db.ref("onlineUsers").get();
-  if (usersSnap.exists()) {
-    Object.keys(usersSnap.val()).forEach(uid => {
-      if (uid !== currentUser.id) {
-        db.ref("bellUnreadCounts/" + uid).transaction(c => (c || 0) + 1);
-      }
-    });
-  }
-  db.ref("bellUnreadCounts/guest").transaction(c => (c || 0) + 1);
+  const unreadTargets = new Set();
+  if (currentUser?.id) unreadTargets.add(currentUser.id);
+  if (activeMessageTargetUser.id) unreadTargets.add(activeMessageTargetUser.id);
+  unreadTargets.add("admin");
+
+  unreadTargets.forEach(uid => {
+    db.ref("bellUnreadCounts/" + uid).transaction(c => (c || 0) + 1);
+  });
 
   closeQuickMessagingModalWindow();
-  toast("Status message updated globally!", "success");
+  toast("Private message sent successfully.", "success");
+  queueNotificationFeedRefresh();
 });
 
 // ==========================================================================
@@ -2101,6 +2305,19 @@ securePinUpdateForm.addEventListener("submit", async (e) => {
 // ==========================================================================
 // ACCORDION ATTENDANCE ACTION HANDLERS
 // ==========================================================================
+function syncAttendancePanelVisibilityByViewport() {
+  if (!attendanceContent || !attendanceChevron) return;
+  if (window.innerWidth > 900) {
+    attendanceContent.classList.remove("hidden");
+    attendanceChevron.classList.add("rotate-180");
+  } else {
+    attendanceContent.classList.add("hidden");
+    attendanceChevron.classList.remove("rotate-180");
+  }
+}
+
+syncAttendancePanelVisibilityByViewport();
+
 attendanceHeaderBtn.addEventListener("click", () => {
   const isHidden = attendanceContent.classList.contains("hidden");
   if (isHidden) {
@@ -2153,6 +2370,8 @@ function initRealtimeDatabaseListeners() {
     const freshSeats = Object.values(activeSeats).filter(u => isPresenceFresh(u));
     let count = freshSeats.length;
     onlineCount.innerText = count;
+    onlineCount.classList.toggle("counter-online", count > 0);
+    onlineCount.classList.toggle("counter-offline", count === 0);
 
     let isOccupied = false;
     let userCourseName = "";
@@ -2181,6 +2400,15 @@ function initRealtimeDatabaseListeners() {
     const users = snap.val() || {};
     const freshUsers = Object.values(users).filter(u => isPresenceFresh(u));
 
+    refreshRaisedHandsBoard(freshUsers);
+
+    const onlineCountValue = freshUsers.length;
+    if (onlineCount) {
+      onlineCount.innerText = onlineCountValue;
+      onlineCount.classList.toggle("counter-online", onlineCountValue > 0);
+      onlineCount.classList.toggle("counter-offline", onlineCountValue === 0);
+    }
+
     if (freshUsers.length === 0) {
       usersList.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-secondary); font-size:13px;">No developers currently active in workspace.</div>';
       return;
@@ -2196,13 +2424,22 @@ function initRealtimeDatabaseListeners() {
         badgeHtml = `<span class="in-course-indicator-tag"><i class="bi bi-book-half"></i> ${u.activeCourseName || 'In Course'} (${pathTime})</span>`;
       }
 
+      const isCurrentUserCard = currentUser && currentUser.id === u.id;
+      const handBtnHtml = isCurrentUserCard ? `
+        <button class="hand-raise-toggle-btn ${u.handRaised ? 'lowered' : ''}" onclick="toggleMyHandRaise()" title="${u.handRaised ? 'Lower hand' : 'Raise hand'}">
+          <i class="bi bi-hand-index-thumb"></i> ${u.handRaised ? 'Lower Hand' : 'Raise Hand ✋'}
+        </button>
+      ` : '';
+      const handStatusHtml = u.handRaised ? `<span class="hand-raise-pill">✋ Raised</span>` : '';
+
       card.innerHTML = `
         <div class="left-info-block">
-          <div class="name">${escapeHtml(u.name)} ${badgeHtml}</div>
+          <div class="name">${escapeHtml(u.name)} ${badgeHtml} ${handStatusHtml}</div>
           <div class="live-elapsed-badge" data-start="${u.start}">00:00</div>
         </div>
-        <div style="display:flex; align-items:center; gap:8px;">
-          <button class="student-msg-icon-trigger" onclick="openQuickMessagingModal('${u.id}', '${u.code}')" title="Send quick message option">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+          ${handBtnHtml}
+          <button class="student-msg-icon-trigger" onclick="openQuickMessagingModal('${u.id}', '${u.code}', '${isCurrentUserCard ? 'global' : 'private'}')" title="${isCurrentUserCard ? 'Send global status alert' : 'Send private message'}">
             <i class="bi bi-chat-left-text"></i>
           </button>
           <div class="code">Seat ${escapeHtml(u.code)}</div>
@@ -2715,7 +2952,7 @@ async function bootstrapApplicationWorkspaceRuntime() {
     const onlineSnap = await db.ref("onlineUsers/" + cacheUserId).get();
     const storedSessionToken = sessionStorage.getItem("active_session_token") || "";
     if (onlineSnap.exists() && storedSessionToken && onlineSnap.val().sessionToken === storedSessionToken) {
-      currentUser = onlineSnap.val();
+      currentUser = { ...onlineSnap.val(), handRaised: !!onlineSnap.val().handRaised, handRaisedAt: onlineSnap.val().handRaisedAt || 0 };
       
       formBox.classList.add("hidden");
       leaveBtn.classList.remove("hidden");
@@ -2779,3 +3016,4 @@ document.getElementById("themeToggleBtn").addEventListener("click", () => {
 });
 
 window.addEventListener("DOMContentLoaded", bootstrapApplicationWorkspaceRuntime);
+test
