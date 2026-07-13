@@ -2102,6 +2102,43 @@
     .modal-footer { padding: 10px 16px; }
   }
 
+
+@media (max-width: 768px) {
+  .control-panel.panel-card {
+    min-height: 0 !important;
+    align-items: stretch !important;
+    justify-content: flex-start !important;
+  }
+
+  #handRaiseBoard {
+    position: relative !important;
+    top: auto !important;
+    margin: 0 0 12px 0 !important;
+    order: 0 !important;
+    width: 100%;
+  }
+
+  .counter-card {
+    order: 1 !important;
+  }
+
+  #formBox {
+    order: 2 !important;
+  }
+
+  #activeSessionBox {
+    order: 3 !important;
+  }
+
+  #adminAuthBox {
+    order: 4 !important;
+  }
+
+  #adminPanel {
+    order: 5 !important;
+  }
+}
+
 /* ==========================================================================
    ATTENDANCE REPORT MODAL + SUMMARY CARDS
    ========================================================================== */
