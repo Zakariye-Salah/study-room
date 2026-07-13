@@ -136,6 +136,14 @@
       
      <!-- LEFT COLUMN -->
     <section class="control-panel panel-card">
+      <div id="handRaiseBoard" class="hand-raise-board">
+        <div class="hand-raise-board-header">
+          <span id="handRaiseBoardTitle"><i class="bi bi-hand-index-thumb"></i> Raised Hands</span>
+          <span id="raisedHandsCount" class="hand-raise-count">0</span>
+        </div>
+        <div id="raisedHandsList" class="raised-hands-list"></div>
+      </div>
+
       <div class="stat-card counter-card">
         <span class="stat-label"><i class="bi bi-people-fill"></i> Online now</span>
         <span id="onlineCount" class="stat-value">0</span>
@@ -244,17 +252,19 @@
               <button id="btnCloseMessageModal" class="modal-close-x">&times;</button>
             </div>
             <div class="modal-body">
+              <p id="quickMessageRecipientLabel" style="margin-bottom: 8px; font-weight: 700; color: var(--color-primary);"></p>
               <p style="margin-bottom: 15px;">Remaining Daily Message Allowance: <strong id="lblRemainingMsgBudgetCounter">3</strong>/3</p>
               <div class="message-templates-grid-full">
-                <button class="template-msg-pill" data-msg="I am waiting outside the course room.">I am waiting</button>
-                <button class="template-msg-pill" data-msg="Please assist me with this lesson code problem block.">Need help</button>
-                <button class="template-msg-pill" data-msg="Taking a brief study break right now.">Break time</button>
-                <button class="template-msg-pill" data-msg="Finished with my assignment milestones!">Task done</button>
+                <button class="template-msg-pill" data-msg="You are doing great, keep going.">You are doing great</button>
+                <button class="template-msg-pill" data-msg="Please, I need to enter the course if it is possible.">Please let me in</button>
+                <button class="template-msg-pill" data-msg="Please leave the course when you finish your task.">Please leave the course</button>
+                <button class="template-msg-pill" data-msg="Take a short break and come back ready.">Take a short break</button>
+<button class="template-msg-pill" data-msg="Please reply when you are free.">Please reply later</button>
               </div>
             </div>
             <div class="modal-footer">
               <button id="btnCancelMessageModal" class="action-btn neutral-btn">Cancel</button>
-              <button id="btnSubmitQuickStudentMessage" class="action-btn primary-btn">Send Alert</button>
+              <button id="btnSubmitQuickStudentMessage" class="action-btn primary-btn">Send Private Message</button>
             </div>
           </div>
         </div>
