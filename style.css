@@ -669,7 +669,72 @@
     }
   }
   
-  .panel-card {
+  /* RIGHT COLUMN / DESKTOP GRID POSITIONING */
+.live-activity {
+  align-self: start;
+}
+
+.live-students-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.live-students-container > .section-title {
+  display: flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  margin: 2px 0 2px;
+  color: var(--text-primary);
+}
+
+#handRaiseBoard {
+  position: relative;
+}
+
+@media (min-width: 901px) {
+  /* Desktop only: two clear columns */
+  .dashboard-grid {
+    grid-template-columns: minmax(340px, 0.95fr) minmax(520px, 1.35fr);
+    align-items: start;
+  }
+
+  .control-panel,
+  .live-activity {
+    align-self: start;
+  }
+
+  #handRaiseBoard {
+    position: sticky;
+    top: 12px;
+    z-index: 30;
+  }
+
+  #usersList {
+    min-width: 0;
+    align-self: start;
+  }
+
+  #attendanceHeaderBtn {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+  }
+
+  /* Attendance section should stay expanded on desktop */
+  .accordion-panel-content.hidden {
+    display: block !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .live-activity {
+    position: relative;
+    max-height: none;
+    overflow: visible;
+  }
+}
+.panel-card {
     background: var(--bg-surface);
     border: 1px solid var(--border-color);
     border-radius: var(--radius);
@@ -719,6 +784,185 @@
     font-weight: 800;
     color: var(--color-primary);
     text-shadow: 0 1px 4px rgba(37, 99, 235, 0.1);
+  }
+
+  .stat-value.counter-online {
+    color: var(--color-success);
+  }
+
+  .stat-value.counter-offline {
+    color: #3b82f6;
+  }
+
+  .hand-raise-board {
+    position: sticky;
+    top: 88px;
+    z-index: 25;
+    background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(22, 163, 74, 0.08));
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 14px;
+    box-shadow: var(--shadow-sm);
+    backdrop-filter: blur(8px);
+  }
+
+  .hand-raise-board-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--text-primary);
+    margin-bottom: 10px;
+  }
+
+  .hand-raise-count {
+    min-width: 32px;
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(37, 99, 235, 0.12);
+    color: var(--color-primary);
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .raised-hands-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .raised-hand-empty {
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: var(--bg-surface-elevated);
+    border: 1px dashed var(--border-color);
+    color: var(--text-secondary);
+    font-size: 13px;
+    text-align: center;
+  }
+
+  .raised-hand-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-color);
+    transition: var(--transition-smooth);
+  }
+
+  .raised-hand-item:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-sm);
+    border-color: var(--color-primary);
+  }
+
+  .raised-hand-main {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .raised-hand-emoji {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(245, 158, 11, 0.16);
+    color: #d97706;
+    flex-shrink: 0;
+    font-size: 16px;
+  }
+
+  .raised-hand-name {
+    font-size: 14px;
+    font-weight: 800;
+    color: var(--text-primary);
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .raised-hand-seat {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+  }
+
+  .raised-hand-time {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+
+  .hand-raise-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(245, 158, 11, 0.14);
+    color: #b45309;
+    font-size: 11px;
+    font-weight: 800;
+    margin-left: 8px;
+  }
+
+  .hand-raise-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    background: rgba(245, 158, 11, 0.12);
+    color: #b45309;
+    border-radius: 10px;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+    transition: var(--transition-smooth);
+    white-space: nowrap;
+  }
+
+  .hand-raise-toggle-btn:hover {
+    transform: translateY(-1px);
+    background: rgba(245, 158, 11, 0.2);
+  }
+
+  .hand-raise-toggle-btn.lowered {
+    border-color: rgba(220, 38, 38, 0.4);
+    background: rgba(220, 38, 38, 0.12);
+    color: var(--color-danger);
+  }
+
+  .private-message-card {
+    border-color: rgba(37, 99, 235, 0.22);
+    background: linear-gradient(135deg, rgba(37, 99, 235, 0.06), rgba(22, 163, 74, 0.04));
+  }
+
+  .private-message-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 800;
+    color: var(--color-primary);
+    background: rgba(37, 99, 235, 0.12);
+    margin-left: 8px;
   }
   
   .timeframe-dropdown-wrapper {
@@ -1237,6 +1481,16 @@
   
   .clean-att-icon.icon-leave {
     background: rgba(220, 38, 38, 0.15);
+    color: var(--color-danger);
+  }
+
+  .clean-att-icon.icon-hand-raise {
+    background: rgba(245, 158, 11, 0.18);
+    color: #d97706;
+  }
+
+  .clean-att-icon.icon-hand-lower {
+    background: rgba(220, 38, 38, 0.18);
     color: var(--color-danger);
   }
   
