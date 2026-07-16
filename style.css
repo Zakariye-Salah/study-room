@@ -721,10 +721,7 @@
     z-index: 3;
   }
 
-  /* Attendance section should stay expanded on desktop */
-  .accordion-panel-content.hidden {
-    display: block !important;
-  }
+  /* Attendance section is collapsible on desktop too */
 }
 
 @media (max-width: 900px) {
