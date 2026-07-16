@@ -524,68 +524,11 @@ function isLeaveAction(action = "") {
   return value.startsWith("leave") || value.includes("terminated") || value.includes("expired");
 }
 
-function buildResolvedAttendanceEvents(events = [], presenceMap = {}, now = Date.now()) {
-  const ordered = events.filter(Boolean).slice().sort((a, b) => (a.time || 0) - (b.time || 0));
-  const resolved = [];
-  const openRooms = new Map();
-  const openCourses = new Map();
-
-  ordered.forEach((event) => {
-    const code = event.code || "--";
-    const action = String(event.action || "");
-    if (action === "join") {
-      openRooms.set(code, event);
-      resolved.push(event);
-      return;
-    }
-    if (action === "course-enter") {
-      openCourses.set(code, event);
-      resolved.push(event);
-      return;
-    }
-    if (action === "course-leave") {
-      openCourses.delete(code);
-      resolved.push(event);
-      return;
-    }
-    if (isLeaveAction(action)) {
-      openRooms.delete(code);
-      resolved.push(event);
-      return;
-    }
-    resolved.push(event);
-  });
-
-  const synthesizeRoomExit = (joinEvent, reason = "auto-synced") => ({
-    name: joinEvent.name || "Unknown",
-    code: joinEvent.code || "--",
-    action: "terminated",
-    time: now,
-    reason,
-    sessionDuration: Math.max(0, now - (joinEvent.time || now))
-  });
-
-  const synthesizeCourseExit = (courseEvent, reason = "auto-synced") => ({
-    name: courseEvent.name || "Unknown",
-    code: courseEvent.code || "--",
-    action: "course-leave",
-    time: now,
-    reason,
-    sessionDuration: Math.max(0, now - (courseEvent.time || now)),
-    courseName: courseEvent.courseName || "Full Stack AI Engineer"
-  });
-
-  for (const [code, joinEvent] of openRooms.entries()) {
-    if (presenceMap?.[code]?.fresh) continue;
-    const courseEvent = openCourses.get(code);
-    if (courseEvent) {
-      resolved.push(synthesizeCourseExit(courseEvent));
-      openCourses.delete(code);
-    }
-    resolved.push(synthesizeRoomExit(joinEvent));
-  }
-
-  return resolved.slice().sort((a, b) => (a.time || 0) - (b.time || 0));
+function buildResolvedAttendanceEvents(events = []) {
+  return events
+    .filter(Boolean)
+    .slice()
+    .sort((a, b) => (a.time || 0) - (b.time || 0));
 }
 
 function buildStaleSessionSummary(seatData = {}, leaseData = null) {
@@ -605,7 +548,7 @@ async function closeStalePresenceSession(seatData, leaseData = null) {
   if ((isPresenceFresh(seatData) || seatData.exitLoggedAt) && !isSessionOverLimit(seatData)) return false;
 
   const { now, code, name, ownerId, sessionStart, sessionDuration, courseStart, activeCourseName } = buildStaleSessionSummary(seatData, leaseData);
-  const hasCourse = !!seatData.inCourse || !!leaseData?.inCourse || !!courseStart;
+  const hasCourse = !!seatData.inCourse || !!leaseData?.inCourse || (!!seatData.courseEnteredAt || !!leaseData?.courseEnteredAt);
 
   if (hasCourse) {
     try {
