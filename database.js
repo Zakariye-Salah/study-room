@@ -148,6 +148,40 @@ const quickMessageRecipientLabel = document.getElementById("quickMessageRecipien
 // STATE MANAGEMENT ENGINE
 // ==========================================================================
 let currentUser = null;
+
+const DEFAULT_BROWSER_TITLE = "Study Room - Not joined";
+let courseOccupiedAlarmAudio = null;
+
+function syncBrowserTitle() {
+  if (!currentUser) {
+    document.title = DEFAULT_BROWSER_TITLE;
+    return;
+  }
+
+  if (currentUser.inCourse) {
+    document.title = "Study Room - Joined • Course";
+    return;
+  }
+
+  const seatLabel = currentUser.code ? `Seat ${currentUser.code}` : "Seat --";
+  document.title = `Study Room - Joined • ${seatLabel}`;
+}
+
+function playCourseOccupiedAlarm() {
+  try {
+    if (!courseOccupiedAlarmAudio) {
+      courseOccupiedAlarmAudio = new Audio("alarm.mp3");
+      courseOccupiedAlarmAudio.preload = "auto";
+      courseOccupiedAlarmAudio.volume = 1;
+    }
+    courseOccupiedAlarmAudio.currentTime = 0;
+    const playPromise = courseOccupiedAlarmAudio.play();
+    if (playPromise && typeof playPromise.catch === "function") {
+      playPromise.catch(() => {});
+    }
+  } catch (_) {}
+}
+
 let timerInterval = null;
 let liveCardsInterval = null;
 let isAdminAuthenticated = false;
@@ -176,6 +210,9 @@ let activeAttendanceEventsCache = [];
 let liveAttendanceLogLimit = parseInt(localStorage.getItem("attendance_log_limit") || "5", 10);
 let attendanceRefreshInterval = null;
 let staleSessionMonitorInterval = null;
+let immediateStaleSweepTimeout = null;
+let lastSeatsPresenceSignature = "";
+let lastOnlinePresenceSignature = "";
 const ATTENDANCE_REFRESH_INTERVAL_MS = 10000; // safer for Firebase free plan
 const STALE_SESSION_SWEEP_INTERVAL_MS = 30000;
 
@@ -445,6 +482,7 @@ function isTimestampInSelectedRange(timestamp, range) {
 
 function isPresenceFresh(user) {
   if (!user) return false;
+  if (user.exitPending || user.disconnectRequestedAt || user.exitLoggedAt) return false;
   const lastSeen = user.lastSeen || user.heartbeatAt || user.start || 0;
   if ((Date.now() - lastSeen) > ACTIVE_PRESENCE_GRACE_MS) return false;
   return !isSessionOverLimit(user);
@@ -499,8 +537,21 @@ function buildPresencePayload(extra = {}) {
   };
 }
 
+function buildDisconnectTombstone(reason = "tab-close") {
+  return {
+    exitPending: true,
+    disconnectRequestedAt: Date.now(),
+    disconnectReason: reason,
+    lastSeen: 0,
+    heartbeatAt: 0,
+    exitLoggedAt: 0,
+    exitReason: reason
+  };
+}
+
 function isLeaseFresh(lease) {
   if (!lease) return false;
+  if (lease.exitPending || lease.disconnectRequestedAt || lease.exitLoggedAt) return false;
   const marker = lease.heartbeatAt || lease.lastSeen || lease.start || 0;
   return lease.sessionToken && (Date.now() - marker) <= ACTIVE_PRESENCE_GRACE_MS;
 }
@@ -524,11 +575,43 @@ function isLeaveAction(action = "") {
   return value.startsWith("leave") || value.includes("terminated") || value.includes("expired");
 }
 
-function buildResolvedAttendanceEvents(events = []) {
-  return events
-    .filter(Boolean)
-    .slice()
-    .sort((a, b) => (a.time || 0) - (b.time || 0));
+function buildResolvedAttendanceEvents(events = [], presenceMap = {}, now = Date.now()) {
+  const ordered = events.filter(Boolean).slice().sort((a, b) => (a.time || 0) - (b.time || 0));
+  const resolved = [];
+  const openRooms = new Map();
+  const openCourses = new Map();
+
+  ordered.forEach((event) => {
+    const code = event.code || "--";
+    const action = String(event.action || "");
+    if (action === "join") {
+      openRooms.set(code, event);
+      resolved.push(event);
+      return;
+    }
+    if (action === "course-enter") {
+      openCourses.set(code, event);
+      resolved.push(event);
+      return;
+    }
+    if (action === "course-leave") {
+      openCourses.delete(code);
+      resolved.push(event);
+      return;
+    }
+    if (isLeaveAction(action)) {
+      openRooms.delete(code);
+      resolved.push(event);
+      return;
+    }
+    resolved.push(event);
+  });
+
+  // Do not synthesize leave events here.
+  // Real leave / stale-session rows are written once by the session teardown path.
+  // This prevents the attendance log from showing changing fake timestamps on every refresh.
+
+  return resolved.slice().sort((a, b) => (a.time || 0) - (b.time || 0));
 }
 
 function buildStaleSessionSummary(seatData = {}, leaseData = null) {
@@ -538,17 +621,18 @@ function buildStaleSessionSummary(seatData = {}, leaseData = null) {
   const ownerId = seatData.id || leaseData?.ownerId || seatData.ownerId || seatData.userId || "";
   const sessionStart = seatData.start || leaseData?.start || now;
   const sessionDuration = Math.min(SESSION_LIMIT, Math.max(0, now - sessionStart));
-  const courseStart = seatData.courseEnteredAt || leaseData?.courseEnteredAt || sessionStart;
+  const courseStart = seatData.courseEnteredAt || leaseData?.courseEnteredAt || 0;
   const activeCourseName = seatData.activeCourseName || leaseData?.activeCourseName || "Full Stack AI Engineer";
   return { now, code, name, ownerId, sessionStart, sessionDuration, courseStart, activeCourseName };
 }
 
 async function closeStalePresenceSession(seatData, leaseData = null) {
-  if (!seatData || !seatData.code || !seatData.sessionToken) return false;
-  if ((isPresenceFresh(seatData) || seatData.exitLoggedAt) && !isSessionOverLimit(seatData)) return false;
+  const sessionToken = seatData?.sessionToken || leaseData?.sessionToken;
+  if (!seatData || !seatData.code || !sessionToken) return false;
+  if ((isPresenceFresh(seatData) || seatData.exitLoggedAt || leaseData?.exitLoggedAt) && !isSessionOverLimit(seatData)) return false;
 
   const { now, code, name, ownerId, sessionStart, sessionDuration, courseStart, activeCourseName } = buildStaleSessionSummary(seatData, leaseData);
-  const hasCourse = !!seatData.inCourse || !!leaseData?.inCourse || (!!seatData.courseEnteredAt || !!leaseData?.courseEnteredAt);
+  const hasCourse = !!seatData.inCourse || !!leaseData?.inCourse;
 
   if (hasCourse) {
     try {
@@ -562,7 +646,7 @@ async function closeStalePresenceSession(seatData, leaseData = null) {
       if (targetId) {
         await db.ref(`${COURSE_SESSION_COLLECTION}/${targetId}`).update({
           end: now,
-          duration: Math.max(0, now - (sessions[targetId].start || courseStart || now)),
+          duration: Math.max(0, now - (sessions[targetId].start || courseStart || sessionStart || now)),
           status: "terminated",
           endLabel: formatClockDateTime(now)
         }).catch(() => {});
@@ -591,6 +675,21 @@ async function closeStalePresenceSession(seatData, leaseData = null) {
       courseName: activeCourseName
     });
   }
+
+  await Promise.all([
+    db.ref(`seats/${code}`).update({
+      exitLoggedAt: now,
+      exitReason: "stale-session-sweep"
+    }).catch(() => {}),
+    ownerId ? db.ref(`onlineUsers/${ownerId}`).update({
+      exitLoggedAt: now,
+      exitReason: "stale-session-sweep"
+    }).catch(() => {}) : Promise.resolve(),
+    db.ref(`seatLeases/${code}`).update({
+      exitLoggedAt: now,
+      exitReason: "stale-session-sweep"
+    }).catch(() => {})
+  ]);
 
   const removals = [];
   removals.push(db.ref(`seats/${code}`).remove().catch(() => {}));
@@ -702,10 +801,11 @@ async function registerSessionDisconnectHandlers() {
   const leaseRef = db.ref(`seatLeases/${code}`);
   const seatRef = db.ref(`seats/${code}`);
   const onlineRef = db.ref(`onlineUsers/${id}`);
+  const tombstone = buildDisconnectTombstone("tab-close");
   await Promise.all([
-    leaseRef.onDisconnect().remove().catch(() => {}),
-    seatRef.onDisconnect().remove().catch(() => {}),
-    onlineRef.onDisconnect().remove().catch(() => {})
+    leaseRef.onDisconnect().update(tombstone).catch(() => {}),
+    seatRef.onDisconnect().update(tombstone).catch(() => {}),
+    onlineRef.onDisconnect().update(tombstone).catch(() => {})
   ]).catch(() => {});
 }
 
@@ -1341,14 +1441,30 @@ function downloadAttendanceReportPdf() {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
+function scheduleImmediateStaleSessionSweep() {
+  clearTimeout(immediateStaleSweepTimeout);
+  immediateStaleSweepTimeout = setTimeout(() => {
+    sweepStaleSessions().catch(() => {});
+  }, 250);
+}
+
 async function sweepStaleSessions() {
   try {
-    const seatsSnap = await db.ref("seats").get();
+    const [seatsSnap, leasesSnap] = await Promise.all([
+      db.ref("seats").get(),
+      db.ref("seatLeases").get()
+    ]);
     const seats = seatsSnap.val() || {};
-    for (const [code, seatData] of Object.entries(seats)) {
-      if (!seatData || !seatData.sessionToken) continue;
-      if ((isPresenceFresh(seatData) || seatData.exitLoggedAt) && !isSessionOverLimit(seatData)) continue;
-      await closeStalePresenceSession({ ...seatData, code });
+    const leases = leasesSnap.val() || {};
+    const allCodes = new Set([...Object.keys(seats), ...Object.keys(leases)]);
+    for (const code of allCodes) {
+      const seatData = seats[code] || {};
+      const leaseData = leases[code] || null;
+      const merged = { ...leaseData, ...seatData, code };
+      const sessionToken = merged.sessionToken || leaseData?.sessionToken || seatData.sessionToken;
+      if (!sessionToken) continue;
+      if ((isPresenceFresh(merged) || merged.exitLoggedAt) && !isSessionOverLimit(merged)) continue;
+      await closeStalePresenceSession(merged, leaseData);
     }
   } catch (_) {}
 }
@@ -1367,7 +1483,7 @@ function startAttendanceAutoRefresh() {
 function startStaleSessionMonitor() {
   if (staleSessionMonitorInterval) clearInterval(staleSessionMonitorInterval);
   staleSessionMonitorInterval = setInterval(() => {
-    sweepStaleSessions();
+    sweepStaleSessions().catch(() => {});
   }, STALE_SESSION_SWEEP_INTERVAL_MS);
 }
 
@@ -1485,6 +1601,8 @@ function setStatusText(joined, seat = "", name = "") {
     }
     initiateDynamicPremiumRotator("Guest");
   }
+
+  syncBrowserTitle();
 }
 
 // ==========================================================================
@@ -1837,6 +1955,7 @@ async function openCourseEmbedWindow() {
   inspectOccupants(seatSnap);
 
   if (courseOccupied) {
+    playCourseOccupiedAlarm();
     toast(`CRITICAL RISK ACCESS ERROR: Course resource currently claimed by ${currentOccupantName} (Seat ${currentOccupantSeat})!`, "danger-alert-occupied");
     triggerTitleDangerAlert("🚨 DANGER ALERT", "⚠️ WORKSPACE COLLISION");
     return;
@@ -1848,6 +1967,7 @@ async function openCourseEmbedWindow() {
   currentUser.lastSeen = Date.now();
   currentUser.heartbeatAt = Date.now();
   currentCourseSessionId = db.ref(COURSE_SESSION_COLLECTION).push().key;
+  syncBrowserTitle();
   await db.ref(`seatLeases/${currentUser.code}`).transaction((current) => {
     if (current && current.sessionToken && current.sessionToken !== currentSessionToken) {
       return;
@@ -2448,6 +2568,14 @@ if (attendanceLogLimitSelect) {
 function initRealtimeDatabaseListeners() {
   db.ref("seats").on("value", (snap) => {
     const activeSeats = snap.val() || {};
+    const seatsSignature = Object.keys(activeSeats).sort().map(code => {
+      const u = activeSeats[code] || {};
+      return [code, u.sessionToken || "", u.exitPending ? 1 : 0, u.disconnectRequestedAt || 0, u.exitLoggedAt || 0, u.lastSeen || 0, u.heartbeatAt || 0].join(":");
+    }).join("|");
+    if (seatsSignature !== lastSeatsPresenceSignature) {
+      lastSeatsPresenceSignature = seatsSignature;
+      scheduleImmediateStaleSessionSweep();
+    }
     const freshSeats = Object.values(activeSeats).filter(u => isPresenceFresh(u));
     let count = freshSeats.length;
     onlineCount.innerText = count;
@@ -2479,6 +2607,14 @@ function initRealtimeDatabaseListeners() {
   db.ref("onlineUsers").on("value", (snap) => {
     usersList.innerHTML = "";
     const users = snap.val() || {};
+    const usersSignature = Object.keys(users).sort().map(id => {
+      const u = users[id] || {};
+      return [id, u.code || "", u.sessionToken || "", u.exitPending ? 1 : 0, u.disconnectRequestedAt || 0, u.exitLoggedAt || 0, u.lastSeen || 0, u.heartbeatAt || 0].join(":");
+    }).join("|");
+    if (usersSignature !== lastOnlinePresenceSignature) {
+      lastOnlinePresenceSignature = usersSignature;
+      scheduleImmediateStaleSessionSweep();
+    }
     const freshUsers = Object.values(users).filter(u => isPresenceFresh(u));
 
     refreshRaisedHandsBoard(freshUsers);
@@ -3058,6 +3194,7 @@ async function bootstrapApplicationWorkspaceRuntime() {
       leaveBtn.classList.remove("hidden");
       pinActionBox.classList.remove("hidden");
       setStatusText(true, currentUser.code, currentUser.name);
+      syncBrowserTitle();
       updateCourseActionButton();
       focusDefaultCourseAction();
 
