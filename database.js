@@ -203,6 +203,7 @@ let activeAttendanceReportRange = "today";
 let activeAttendanceReportUser = "all";
 let activeAttendanceReportLimit = 10;
 const ACTIVE_PRESENCE_GRACE_MS = 90000;
+const HIDDEN_PRESENCE_GRACE_MS = 15 * 60 * 1000;
 const HEARTBEAT_INTERVAL_MS = 15000;
 const COURSE_SESSION_COLLECTION = "courseSessions";
 
@@ -233,6 +234,7 @@ let currentDeviceId = localStorage.getItem("device_id") || "";
 let currentTabId = sessionStorage.getItem("active_tab_id") || "";
 let currentSessionToken = sessionStorage.getItem("active_session_token") || "";
 let isSessionTeardownInProgress = false;
+let visibilitySyncTimeout = null;
 
 const MOTIVATION_QUOTES = [
   "Errors and bugs are validation evidence that you are stretching operational capability boundaries. ⚙️",
@@ -484,7 +486,8 @@ function isPresenceFresh(user) {
   if (!user) return false;
   if (user.exitPending || user.disconnectRequestedAt || user.exitLoggedAt) return false;
   const lastSeen = user.lastSeen || user.heartbeatAt || user.start || 0;
-  if ((Date.now() - lastSeen) > ACTIVE_PRESENCE_GRACE_MS) return false;
+  const graceWindow = getPresenceGraceWindow(user);
+  if ((Date.now() - lastSeen) > graceWindow) return false;
   return !isSessionOverLimit(user);
 }
 
@@ -531,6 +534,7 @@ function buildPresencePayload(extra = {}) {
     deviceId: currentDeviceId,
     tabId: currentTabId,
     sessionToken: currentSessionToken,
+    visibilityState: getCurrentVisibilityState(),
     inCourse: !!currentUser.inCourse,
     courseEnteredAt: currentUser.courseEnteredAt || 0,
     activeCourseName: currentUser.activeCourseName || ""
@@ -547,6 +551,54 @@ function buildDisconnectTombstone(reason = "tab-close") {
     exitLoggedAt: 0,
     exitReason: reason
   };
+}
+
+function getCurrentVisibilityState() {
+  try {
+    return document.visibilityState || (document.hidden ? "hidden" : "visible");
+  } catch (_) {
+    return "visible";
+  }
+}
+
+function getPresenceGraceWindow(user) {
+  return user && user.visibilityState === "hidden" ? HIDDEN_PRESENCE_GRACE_MS : ACTIVE_PRESENCE_GRACE_MS;
+}
+
+async function claimSessionExitOnce(code, sessionToken, reason, exitTime = Date.now()) {
+  if (!code || !sessionToken) return { claimed: false, exitTime };
+  const leaseRef = db.ref(`seatLeases/${code}`);
+  let claimed = false;
+  await leaseRef.transaction((current) => {
+    if (!current || current.sessionToken !== sessionToken) return current;
+    if (current.exitLoggedAt || current.exitPending || current.disconnectRequestedAt) return current;
+    claimed = true;
+    return {
+      ...current,
+      exitPending: true,
+      exitPendingAt: exitTime,
+      exitPendingReason: reason,
+      exitLoggedAt: exitTime,
+      exitReason: reason
+    };
+  }).catch(() => {});
+  return { claimed, exitTime };
+}
+
+async function syncBrowserVisibilityState() {
+  if (!currentUser || !currentSessionToken || !currentUser.code || !currentUser.id) return;
+  const visibilityState = getCurrentVisibilityState();
+  const payload = {
+    visibilityState,
+    lastSeen: Date.now(),
+    heartbeatAt: Date.now(),
+    sessionToken: currentSessionToken
+  };
+  await Promise.all([
+    db.ref(`seatLeases/${currentUser.code}`).update(payload).catch(() => {}),
+    db.ref(`seats/${currentUser.code}`).update(payload).catch(() => {}),
+    db.ref(`onlineUsers/${currentUser.id}`).update(payload).catch(() => {})
+  ]);
 }
 
 function isLeaseFresh(lease) {
@@ -632,6 +684,8 @@ async function closeStalePresenceSession(seatData, leaseData = null) {
   if ((isPresenceFresh(seatData) || seatData.exitLoggedAt || leaseData?.exitLoggedAt) && !isSessionOverLimit(seatData)) return false;
 
   const { now, code, name, ownerId, sessionStart, sessionDuration, courseStart, activeCourseName } = buildStaleSessionSummary(seatData, leaseData);
+  const exitClaim = await claimSessionExitOnce(code, sessionToken, "stale-session-sweep", now);
+  if (!exitClaim.claimed) return false;
   const hasCourse = !!seatData.inCourse || !!leaseData?.inCourse;
 
   if (hasCourse) {
@@ -717,14 +771,7 @@ function startTimer() {
     }
 
     if (currentUser.inCourse && isSessionOverLimit({ start: currentUser.courseEnteredAt })) {
-      leaveCourse(true, "course-expired", {
-        silent: true,
-        skipConfirm: true,
-        allowDuringTeardown: true,
-        suppressAttendanceLog: false
-      }).then(() => {
-        leaveRoom(true, "session-expired");
-      });
+      leaveRoom(true, "session-expired");
       return;
     }
 
@@ -743,12 +790,6 @@ async function refreshAllPresenceHeartbeats() {
   }
 
   if (currentUser.inCourse && isSessionOverLimit({ start: currentUser.courseEnteredAt })) {
-    await leaveCourse(true, "course-expired", {
-      silent: true,
-      skipConfirm: true,
-      allowDuringTeardown: true,
-      suppressAttendanceLog: false
-    });
     await leaveRoom(true, "session-expired");
     return;
   }
@@ -792,6 +833,22 @@ function startSessionHeartbeat() {
 function stopSessionHeartbeat() {
   clearInterval(sessionHeartbeatInterval);
   sessionHeartbeatInterval = null;
+}
+
+function bindVisibilityPresenceSync() {
+  if (document.__studyRoomVisibilitySyncBound) return;
+  document.__studyRoomVisibilitySyncBound = true;
+
+  const scheduleSync = () => {
+    if (visibilitySyncTimeout) clearTimeout(visibilitySyncTimeout);
+    visibilitySyncTimeout = setTimeout(() => {
+      syncBrowserVisibilityState().catch(() => {});
+    }, 150);
+  };
+
+  document.addEventListener("visibilitychange", scheduleSync);
+  window.addEventListener("focus", scheduleSync);
+  window.addEventListener("blur", scheduleSync);
 }
 
 async function registerSessionDisconnectHandlers() {
@@ -849,6 +906,7 @@ function updateCourseActionButton() {
 async function leaveCourse(auto = false, reason = "manual-course-leave", opts = {}) {
   const { silent = false, skipConfirm = false, allowDuringTeardown = false, suppressAttendanceLog = false } = opts;
   if (!currentUser || !currentUser.inCourse || (isSessionTeardownInProgress && !allowDuringTeardown)) return false;
+  if (auto && isSessionTeardownInProgress && !allowDuringTeardown) return false;
 
   if (!auto && !skipConfirm) {
     return new Promise((resolve) => {
@@ -1810,6 +1868,8 @@ async function leaveRoom(auto = false, reason = "leave") {
     const wasInCourse = !!currentUser.inCourse;
     const wasHandRaised = !!currentUser.handRaised;
     const activeCourseName = currentUser.activeCourseName || "Full Stack AI Engineer";
+    const exitClaim = await claimSessionExitOnce(code, liveToken, auto ? "stale-session-sweep" : reason);
+    if (!exitClaim.claimed) return;
 
     if (wasHandRaised) {
       currentUser.handRaised = false;
@@ -3228,6 +3288,7 @@ async function bootstrapApplicationWorkspaceRuntime() {
   }
 
   initRealtimeDatabaseListeners();
+  bindVisibilityPresenceSync();
   startAttendanceAutoRefresh();
   startStaleSessionMonitor();
   refreshAttendanceViews();
