@@ -245,6 +245,31 @@
           <div id="usersList" class="students-list-grid"></div>
         </div>
 
+        <div id="bestUsersSnapshotPanel" class="best-users-snapshot-panel">
+          <div class="best-users-snapshot-header">
+            <button id="bestUsersSnapshotToggleBtn" class="best-users-snapshot-toggle" type="button" aria-expanded="false" aria-controls="bestUsersSnapshotBody">
+              <span><i class="bi bi-trophy-fill"></i> Best Users Snapshot</span>
+              <i id="bestUsersSnapshotChevron" class="bi bi-chevron-down transition-rotation"></i>
+            </button>
+            <div class="best-users-snapshot-meta">
+              <span id="bestUsersJoinedCount">Joined: 0</span>
+              <span id="bestUsersCourseCount">Course entered: 0</span>
+            </div>
+          </div>
+          <div id="bestUsersSnapshotBody" class="best-users-snapshot-body hidden">
+            <div class="best-users-snapshot-grid">
+              <div class="best-users-snapshot-box">
+                <div class="best-users-snapshot-box-title"><i class="bi bi-box-arrow-in-right"></i> Room Joined</div>
+                <div id="bestUsersRoomJoinedList" class="mini-rank-list"></div>
+              </div>
+              <div class="best-users-snapshot-box">
+                <div class="best-users-snapshot-box-title"><i class="bi bi-mortarboard-fill"></i> Course Entered</div>
+                <div id="bestUsersCourseEnteredList" class="mini-rank-list"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div id="quickStudentMessageModal" class="modal-blur-overlay hidden">
           <div class="modal-window scale-animation">
             <div class="modal-header">
