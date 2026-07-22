@@ -52,6 +52,10 @@ const personalWeeklyBox = document.getElementById("personalWeeklyBox");
 const weeklyMinutesVal = document.getElementById("weeklyMinutesVal");
 const usersList = document.getElementById("usersList");
 const attendanceList = document.getElementById("attendanceList");
+const bestUsersSnapshotPanel = document.getElementById("bestUsersSnapshotPanel");
+const bestUsersSnapshotToggleBtn = document.getElementById("bestUsersSnapshotToggleBtn");
+const bestUsersSnapshotBody = document.getElementById("bestUsersSnapshotBody");
+const bestUsersSnapshotChevron = document.getElementById("bestUsersSnapshotChevron");
 
 const attendanceHeaderBtn = document.getElementById("attendanceHeaderBtn");
 const attendanceChevron = document.getElementById("attendanceChevron");
@@ -209,12 +213,124 @@ const COURSE_SESSION_COLLECTION = "courseSessions";
 
 let activeAttendanceEventsCache = [];
 let liveAttendanceLogLimit = parseInt(localStorage.getItem("attendance_log_limit") || "5", 10);
+let bestUsersSnapshotExpanded = localStorage.getItem("best_users_snapshot_expanded") === "1";
 let attendanceRefreshInterval = null;
 let staleSessionMonitorInterval = null;
 let immediateStaleSweepTimeout = null;
 let lastSeatsPresenceSignature = "";
 let lastOnlinePresenceSignature = "";
 const ATTENDANCE_REFRESH_INTERVAL_MS = 10000; // safer for Firebase free plan
+
+const ATTENDANCE_EVENT_CACHE_KEY = "__study_room_attendance_event_cache__";
+const ATTENDANCE_EVENT_SIGNATURE_CACHE_KEY = "__study_room_attendance_event_signature_cache__";
+let attendanceEventWriteCache = new Set();
+let attendanceEventSignatureCache = new Map();
+
+try {
+  const cachedEventKeys = JSON.parse(sessionStorage.getItem(ATTENDANCE_EVENT_CACHE_KEY) || "[]");
+  if (Array.isArray(cachedEventKeys)) attendanceEventWriteCache = new Set(cachedEventKeys);
+} catch (_) {}
+
+try {
+  const cachedSignatures = JSON.parse(sessionStorage.getItem(ATTENDANCE_EVENT_SIGNATURE_CACHE_KEY) || "[]");
+  if (Array.isArray(cachedSignatures)) attendanceEventSignatureCache = new Map(cachedSignatures);
+} catch (_) {}
+
+function persistAttendanceEventWriteCache() {
+  try {
+    sessionStorage.setItem(ATTENDANCE_EVENT_CACHE_KEY, JSON.stringify([...attendanceEventWriteCache].slice(-250)));
+  } catch (_) {}
+}
+
+function persistAttendanceEventSignatureCache() {
+  try {
+    sessionStorage.setItem(ATTENDANCE_EVENT_SIGNATURE_CACHE_KEY, JSON.stringify([...attendanceEventSignatureCache.entries()].slice(-250)));
+  } catch (_) {}
+}
+
+function getSeatDisplayName(code = "", fallback = "Unknown") {
+  return (SEATS[code] && SEATS[code].name) ? SEATS[code].name : (fallback || "Unknown");
+}
+
+function normalizeAttendanceEvent(event = {}) {
+  const code = event.code || "--";
+  return {
+    ...event,
+    code,
+    name: event.name || getSeatDisplayName(code, "Unknown")
+  };
+}
+
+function buildAttendanceEventKey(event = {}) {
+  const action = String(event.action || "").toLowerCase();
+  const code = event.code || "--";
+  const sessionToken = event.sessionToken || event.sessionId || event.token || currentSessionToken || "";
+  const eventTime = Number.isFinite(event.time) ? Math.floor(event.time / 1000) : "";
+  const reason = String(event.reason || "").toLowerCase();
+  const courseName = String(event.courseName || event.activeCourseName || "").toLowerCase();
+  const start = Number.isFinite(event.start) ? Math.floor(event.start / 1000) : "";
+  const handRaised = event.handRaised ? "1" : "0";
+  return [action, code, sessionToken, eventTime || start, reason, courseName, handRaised].join("|");
+}
+
+function buildAttendanceEventSignature(event = {}) {
+  const action = String(event.action || "").toLowerCase();
+  const code = event.code || "--";
+  const sessionToken = event.sessionToken || event.sessionId || event.token || currentSessionToken || "";
+  const reason = String(event.reason || "").toLowerCase();
+  const courseName = String(event.courseName || event.activeCourseName || "").toLowerCase();
+  const handRaised = event.handRaised ? "1" : "0";
+  return [action, code, sessionToken, reason, courseName, handRaised].join("|");
+}
+
+async function pushAttendanceOnce(payload = {}) {
+  const event = normalizeAttendanceEvent({ ...payload });
+  if (!event.time) event.time = Date.now();
+  const key = event.eventKey || buildAttendanceEventKey(event);
+  const signature = buildAttendanceEventSignature(event);
+  event.eventKey = key;
+  if (attendanceEventWriteCache.has(key)) return false;
+  const lastSignatureAt = attendanceEventSignatureCache.get(signature) || 0;
+  if (lastSignatureAt && (Date.now() - lastSignatureAt) < 15000) return false;
+  attendanceEventWriteCache.add(key);
+  attendanceEventSignatureCache.set(signature, Date.now());
+  persistAttendanceEventWriteCache();
+  persistAttendanceEventSignatureCache();
+  try {
+    await db.ref("attendance").push(event);
+    return true;
+  } catch (err) {
+    attendanceEventWriteCache.delete(key);
+    attendanceEventSignatureCache.delete(signature);
+    persistAttendanceEventWriteCache();
+    persistAttendanceEventSignatureCache();
+    return false;
+  }
+}
+
+function resetAttendanceEventWriteCache() {
+  attendanceEventWriteCache = new Set();
+  attendanceEventSignatureCache = new Map();
+  persistAttendanceEventWriteCache();
+  persistAttendanceEventSignatureCache();
+}
+
+function setBestUsersSnapshotExpanded(expanded) {
+  bestUsersSnapshotExpanded = !!expanded;
+  localStorage.setItem("best_users_snapshot_expanded", bestUsersSnapshotExpanded ? "1" : "0");
+  if (bestUsersSnapshotBody) bestUsersSnapshotBody.classList.toggle("hidden", !bestUsersSnapshotExpanded);
+  if (bestUsersSnapshotToggleBtn) bestUsersSnapshotToggleBtn.setAttribute("aria-expanded", String(bestUsersSnapshotExpanded));
+  if (bestUsersSnapshotChevron) {
+    bestUsersSnapshotChevron.classList.toggle("bi-chevron-down", !bestUsersSnapshotExpanded);
+    bestUsersSnapshotChevron.classList.toggle("bi-chevron-up", bestUsersSnapshotExpanded);
+    bestUsersSnapshotChevron.classList.toggle("rotate-180", bestUsersSnapshotExpanded);
+  }
+}
+
+function toggleBestUsersSnapshot() {
+  setBestUsersSnapshotExpanded(!bestUsersSnapshotExpanded);
+}
+
 const STALE_SESSION_SWEEP_INTERVAL_MS = 30000;
 
 const JOIN_WELCOME_MESSAGES = [
@@ -315,6 +431,8 @@ function setupPasswordFieldToggleDriver(triggerIconId, targetInputFieldId) {
 setupPasswordFieldToggleDriver("togglePinEye", "pinInput");
 setupPasswordFieldToggleDriver("toggleAdminEye", "adminPassword");
 setupPasswordFieldToggleDriver("toggleNewPinEye", "newPinInputField");
+
+setBestUsersSnapshotExpanded(bestUsersSnapshotExpanded);
 
 // ==========================================================================
 // MODAL & DIALOG SYSTEMS
@@ -483,7 +601,7 @@ function isTimestampInSelectedRange(timestamp, range) {
 }
 
 function isPresenceFresh(user) {
-  if (!user) return false;
+  if (!user || !user.sessionToken) return false;
   if (user.exitPending || user.disconnectRequestedAt || user.exitLoggedAt) return false;
   const lastSeen = user.lastSeen || user.heartbeatAt || user.start || 0;
   const graceWindow = getPresenceGraceWindow(user);
@@ -602,7 +720,7 @@ async function syncBrowserVisibilityState() {
 }
 
 function isLeaseFresh(lease) {
-  if (!lease) return false;
+  if (!lease || !lease.sessionToken) return false;
   if (lease.exitPending || lease.disconnectRequestedAt || lease.exitLoggedAt) return false;
   const marker = lease.heartbeatAt || lease.lastSeen || lease.start || 0;
   return lease.sessionToken && (Date.now() - marker) <= ACTIVE_PRESENCE_GRACE_MS;
@@ -630,46 +748,35 @@ function isLeaveAction(action = "") {
 function buildResolvedAttendanceEvents(events = [], presenceMap = {}, now = Date.now()) {
   const ordered = events.filter(Boolean).slice().sort((a, b) => (a.time || 0) - (b.time || 0));
   const resolved = [];
-  const openRooms = new Map();
-  const openCourses = new Map();
+  const seenExact = new Set();
+  const recentBySignature = new Map();
 
-  ordered.forEach((event) => {
-    const code = event.code || "--";
-    const action = String(event.action || "");
-    if (action === "join") {
-      openRooms.set(code, event);
-      resolved.push(event);
+  ordered.forEach((rawEvent) => {
+    const event = normalizeAttendanceEvent(rawEvent);
+    const key = event.eventKey || buildAttendanceEventKey(event);
+    if (seenExact.has(key)) return;
+    seenExact.add(key);
+
+    const signature = buildAttendanceEventSignature(event);
+    const eventTime = Number.isFinite(event.time) ? event.time : now;
+    const lastSeenAt = recentBySignature.get(signature) || 0;
+    if (lastSeenAt && (eventTime - lastSeenAt) < 15000) {
       return;
     }
-    if (action === "course-enter") {
-      openCourses.set(code, event);
-      resolved.push(event);
-      return;
-    }
-    if (action === "course-leave") {
-      openCourses.delete(code);
-      resolved.push(event);
-      return;
-    }
-    if (isLeaveAction(action)) {
-      openRooms.delete(code);
-      resolved.push(event);
-      return;
-    }
+    recentBySignature.set(signature, eventTime);
+
+    // Keep the original event stream clean and stable.
+    // We only normalize names and collapse duplicate transitions here.
     resolved.push(event);
   });
 
-  // Do not synthesize leave events here.
-  // Real leave / stale-session rows are written once by the session teardown path.
-  // This prevents the attendance log from showing changing fake timestamps on every refresh.
-
-  return resolved.slice().sort((a, b) => (a.time || 0) - (b.time || 0));
+  return resolved.sort((a, b) => (a.time || 0) - (b.time || 0));
 }
 
 function buildStaleSessionSummary(seatData = {}, leaseData = null) {
   const now = Date.now();
   const code = seatData.code || leaseData?.seat || leaseData?.code || "--";
-  const name = seatData.name || leaseData?.name || "Unknown";
+  const name = seatData.name || leaseData?.name || getSeatDisplayName(code, "Unknown");
   const ownerId = seatData.id || leaseData?.ownerId || seatData.ownerId || seatData.userId || "";
   const sessionStart = seatData.start || leaseData?.start || now;
   const sessionDuration = Math.min(SESSION_LIMIT, Math.max(0, now - sessionStart));
@@ -708,25 +815,27 @@ async function closeStalePresenceSession(seatData, leaseData = null) {
     } catch (_) {}
   }
 
-  await db.ref("attendance").push({
+  await pushAttendanceOnce({
     name,
     code,
     action: "terminated",
     time: now,
     sessionDuration,
     start: sessionStart,
-    reason: "stale-session-sweep"
+    reason: "stale-session-sweep",
+    sessionToken
   });
 
   if (hasCourse) {
-    await db.ref("attendance").push({
+    await pushAttendanceOnce({
       name,
       code,
       action: "course-leave",
       time: now,
       sessionDuration: Math.min(SESSION_LIMIT, Math.max(0, now - (courseStart || sessionStart))),
       reason: "stale-session-sweep",
-      courseName: activeCourseName
+      courseName: activeCourseName,
+      sessionToken
     });
   }
 
@@ -969,14 +1078,15 @@ async function leaveCourse(auto = false, reason = "manual-course-leave", opts = 
   }).catch(() => {});
 
   if (!suppressAttendanceLog) {
-    db.ref("attendance").push({
+    await pushAttendanceOnce({
       name: currentUser.name,
       code,
       action: auto ? "terminated" : "course-leave",
       time: leaveTime,
       sessionDuration: Math.max(0, leaveTime - (currentUser.start || leaveTime)),
       reason: auto ? "stale-session-sweep" : reason,
-      courseName: activeCourseName
+      courseName: activeCourseName,
+      sessionToken
     });
   }
 
@@ -1004,23 +1114,38 @@ async function finalizeActiveCourseSession(reason = "leave", startOverride = nul
   currentCourseSessionId = null;
 }
 
-function buildRoomSessionsFromAttendance(events) {
+function buildRoomSessionsFromAttendance(events, presenceMap = {}, now = Date.now()) {
   const openSessions = {};
   const sessions = [];
   events.forEach(event => {
     if (!event || !event.time) return;
     if (event.action === 'join') {
-      openSessions[event.code] = { name: event.name, code: event.code, start: event.time };
+      openSessions[event.code] = { name: event.name || getSeatDisplayName(event.code, 'Unknown'), code: event.code, start: event.time, status: 'active' };
       return;
     }
     if (String(event.action || '').startsWith('leave') || String(event.action || '').includes('expired') || String(event.action || '').includes('terminated')) {
       const open = openSessions[event.code];
       if (open) {
-        sessions.push({ ...open, end: event.time, duration: Math.min(SESSION_LIMIT, Math.max(0, event.time - open.start)), action: event.action });
+        sessions.push({ ...open, end: event.time, duration: Math.min(SESSION_LIMIT, Math.max(0, event.time - open.start)), action: event.action, status: 'ended' });
         delete openSessions[event.code];
       }
     }
   });
+
+  Object.entries(openSessions).forEach(([code, open]) => {
+    const presence = presenceMap?.[code] || {};
+    if (!presence.fresh) return;
+    const start = open.start || presence.start || now;
+    sessions.push({
+      ...open,
+      start,
+      end: 0,
+      duration: Math.min(SESSION_LIMIT, Math.max(0, now - start)),
+      action: 'join',
+      status: 'active'
+    });
+  });
+
   return sessions;
 }
 
@@ -1044,13 +1169,13 @@ function buildCourseSessions(events, presenceMap = {}, now = Date.now()) {
 
       return {
         id: item.id,
-        name: item.name || 'Unknown',
+        name: item.name || getSeatDisplayName(code, 'Unknown'),
         code,
         start,
         end,
         duration,
         courseName: item.courseName || item.activeCourseName || 'Full Stack AI Engineer',
-        status,
+        status: isFresh && (!end || end <= 0) ? 'active' : status,
         startLabel: item.startLabel || formatClockDateTime(start),
         endLabel: item.endLabel || (end ? formatClockDateTime(end) : '—')
       };
@@ -1059,7 +1184,7 @@ function buildCourseSessions(events, presenceMap = {}, now = Date.now()) {
 }
 
 function formatAttendanceActionLabel(event) {
-  const name = escapeHtml(event.name || 'Unknown');
+  const name = escapeHtml(event.name || getSeatDisplayName(event.code, 'Unknown'));
   const code = escapeHtml(event.code || '--');
   const nameHtml = `<strong class="clean-att-name">${name}</strong>`;
   const seatHtml = `<span class="clean-att-seat-pill">Seat ${code}</span>`;
@@ -1145,6 +1270,7 @@ async function refreshAttendanceViews(options = {}) {
     const rawEvents = Object.values(attendanceSnap.val() || {});
     activeAttendanceEventsCache = buildResolvedAttendanceEvents(rawEvents, presenceMap);
     renderAttendanceRows(attendanceList, activeAttendanceEventsCache, liveAttendanceLogLimit);
+    renderWeeklyBestUsersSnapshot().catch(() => {});
 
     if (attendanceReportModalOverlay && !attendanceReportModalOverlay.classList.contains('hidden')) {
       await renderAttendanceReportModal({ silent: silentReportRefresh });
@@ -1161,8 +1287,94 @@ function aggregateTopUsers(sessionList) {
     prev.sessions += 1;
     map.set(key, prev);
   });
-  return [...map.values()].sort((a, b) => b.totalMs - a.totalMs);
+
+  const sorted = [...map.values()].sort((a, b) => {
+    if (b.totalMs !== a.totalMs) return b.totalMs - a.totalMs;
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+
+  let rank = 0;
+  let lastMs = null;
+  return sorted.map((item) => {
+    if (lastMs === null || item.totalMs !== lastMs) {
+      rank += 1;
+      lastMs = item.totalMs;
+    }
+    return { ...item, rank };
+  });
 }
+
+async function renderWeeklyBestUsersSnapshot() {
+  const panel = bestUsersSnapshotPanel || document.getElementById("bestUsersSnapshotPanel");
+  const roomList = document.getElementById("bestUsersRoomJoinedList");
+  const courseList = document.getElementById("bestUsersCourseEnteredList");
+  const joinedCount = document.getElementById("bestUsersJoinedCount");
+  const courseCount = document.getElementById("bestUsersCourseCount");
+  if (!panel || !roomList || !courseList) return;
+  const now = Date.now();
+  if (window.__weeklyBestUsersSnapshotLoading) return;
+  if (window.__weeklyBestUsersSnapshotLastAt && (now - window.__weeklyBestUsersSnapshotLastAt) < 25000) return;
+  window.__weeklyBestUsersSnapshotLastAt = now;
+  window.__weeklyBestUsersSnapshotLoading = true;
+
+  try {
+    const [attendanceSnap, courseSnap, seatsSnap, onlineSnap] = await Promise.all([
+      db.ref("attendance").get(),
+      db.ref(COURSE_SESSION_COLLECTION).get(),
+      db.ref("seats").get(),
+      db.ref("onlineUsers").get()
+    ]);
+
+    const presenceMap = getPresenceMapFromSeatsSnapshot(seatsSnap.val() || {});
+    const onlinePresence = getPresenceMapFromSeatsSnapshot(onlineSnap.val() || {});
+    const presenceMerged = { ...presenceMap, ...onlinePresence };
+    const rawAttendanceEvents = Object.values(attendanceSnap.val() || {}).sort((a, b) => (a.time || 0) - (b.time || 0));
+    const attendanceEvents = buildResolvedAttendanceEvents(rawAttendanceEvents, presenceMerged, now);
+    const roomSessions = buildRoomSessionsFromAttendance(attendanceEvents, presenceMerged, now).filter(item => isTimestampInSelectedRange(item.start, "week"));
+    const courseSessions = buildCourseSessions(Object.values(courseSnap.val() || {}), presenceMerged, now).filter(item => isTimestampInSelectedRange(item.start, "week"));
+
+    const roomRank = aggregateTopUsers(roomSessions);
+    const courseRank = aggregateTopUsers(courseSessions);
+
+    const roomUnique = new Set(roomSessions.map(s => s.code)).size;
+    const courseUnique = new Set(courseSessions.map(s => s.code)).size;
+    if (joinedCount) joinedCount.textContent = `Joined: ${roomUnique}`;
+    if (courseCount) courseCount.textContent = `Course entered: ${courseUnique}`;
+
+    const renderRankList = (target, items, emptyText, type) => {
+      if (!target) return;
+      if (!items.length) {
+        target.innerHTML = `<div class="mini-rank-empty">${emptyText}</div>`;
+        return;
+      }
+
+      target.innerHTML = items.slice(0, 5).map((item, index) => {
+        const rankLabel = item.rank || (index + 1);
+        const timeLabel = formatSessionDuration(item.totalMs || 0);
+        return `
+          <div class="mini-rank-row">
+            <div class="mini-rank-index">#${rankLabel}</div>
+            <div class="mini-rank-body">
+              <div class="mini-rank-name">${escapeHtml(item.name || "Unknown")}</div>
+              <div class="mini-rank-seat">Seat ${escapeHtml(item.code || "--")} · ${type === "course" ? "Course" : "Room"}</div>
+            </div>
+            <div class="mini-rank-time">${escapeHtml(timeLabel)}</div>
+          </div>
+        `;
+      }).join("");
+    };
+
+    renderRankList(roomList, roomRank, "No room joins yet.", "room");
+    renderRankList(courseList, courseRank, "No course entries yet.", "course");
+  } catch (_) {
+    roomList.innerHTML = '<div class="mini-rank-empty">Unable to load snapshot right now.</div>';
+    courseList.innerHTML = '<div class="mini-rank-empty">Unable to load snapshot right now.</div>';
+  } finally {
+    window.__weeklyBestUsersSnapshotLoading = false;
+  }
+}
+
+
 
 async function renderAttendanceReportModal(options = {}) {
   if (!attendanceReportModalOverlay) return;
@@ -1182,7 +1394,7 @@ async function renderAttendanceReportModal(options = {}) {
   const presenceMap = getPresenceMapFromSeatsSnapshot(seatsSnap.val() || {});
   const rawAttendanceEvents = Object.values(attendanceSnap.val() || {}).sort((a, b) => (a.time || 0) - (b.time || 0));
   const attendanceEvents = buildResolvedAttendanceEvents(rawAttendanceEvents, presenceMap);
-  const roomSessions = buildRoomSessionsFromAttendance(attendanceEvents);
+  const roomSessions = buildRoomSessionsFromAttendance(attendanceEvents, presenceMap, Date.now());
   const courseSessions = buildCourseSessions(Object.values(courseSnap.val() || {}), presenceMap);
 
   const range = activeAttendanceReportRange;
@@ -1253,7 +1465,7 @@ async function renderAttendanceReportModal(options = {}) {
   rankSource.slice(0, 10).forEach((user, index) => {
     rankHtml.push(`
       <div class="report-rank-row">
-        <div class="report-rank-index">#${index + 1}</div>
+        <div class="report-rank-index">#${user.rank || (index + 1)}</div>
         <div class="report-rank-name">${escapeHtml(user.name)} <span>Seat ${escapeHtml(user.code)}</span></div>
         <div class="report-rank-ms">${formatSessionDuration(user.totalMs)}</div>
       </div>
@@ -1780,6 +1992,7 @@ async function joinRoom(name, code, pin) {
 
   const userId = "u_" + Math.random().toString(36).slice(2);
   currentSessionToken = createStableId("sess");
+  resetAttendanceEventWriteCache();
   sessionStorage.setItem("active_session_token", currentSessionToken);
   localStorage.setItem("active_session_token", currentSessionToken);
   currentUser = {
@@ -1831,11 +2044,12 @@ async function joinRoom(name, code, pin) {
 
   await registerSessionDisconnectHandlers().catch(() => {});
 
-  db.ref("attendance").push({
+  await pushAttendanceOnce({
     name: targetSeat.name,
     code: normalizedCode,
     action: "join",
-    time: Date.now()
+    time: Date.now(),
+    sessionToken: currentSessionToken
   });
 
   toast(`Identity verified! Welcome ${targetSeat.name}`, "success");
@@ -1890,16 +2104,33 @@ async function leaveRoom(auto = false, reason = "leave") {
         suppressAttendanceLog: true
       });
 
-      db.ref("attendance").push({
+      await pushAttendanceOnce({
         name,
         code,
         action: auto ? "terminated" : "course-leave",
         time: Date.now(),
         sessionDuration: Math.min(SESSION_LIMIT, Math.max(0, sessionDuration)),
         reason: auto ? "room-leave-auto" : "room-leave",
-        courseName: activeCourseName
+        courseName: activeCourseName,
+        sessionToken: liveToken
       });
     }
+
+    const exitStamp = {
+      exitLoggedAt: Date.now(),
+      exitReason: auto ? "stale-session-sweep" : reason,
+      lastSeen: Date.now(),
+      heartbeatAt: Date.now(),
+      inCourse: false,
+      activeCourseName: "",
+      courseEnteredAt: 0
+    };
+
+    await Promise.all([
+      db.ref(`seatLeases/${code}`).update(exitStamp).catch(() => {}),
+      db.ref(`seats/${code}`).update(exitStamp).catch(() => {}),
+      db.ref(`onlineUsers/${id}`).update(exitStamp).catch(() => {})
+    ]);
 
     await cancelSessionDisconnectHandlers(code, id);
 
@@ -1934,14 +2165,15 @@ async function leaveRoom(auto = false, reason = "leave") {
       return cur;
     }).catch(() => {});
 
-    db.ref("attendance").push({
+    await pushAttendanceOnce({
       name: name,
       code: code,
       action: auto ? "terminated" : "leave",
       time: Date.now(),
       sessionDuration,
       start: Date.now() - sessionDuration,
-      reason: auto ? "stale-session-sweep" : reason
+      reason: auto ? "stale-session-sweep" : reason,
+      sessionToken: liveToken
     });
 
     toast(auto ? "Session closed after the browser stopped sending heartbeats." : "Workspace link destroyed successfully.", "info");
@@ -2075,12 +2307,13 @@ async function openCourseEmbedWindow() {
     heartbeatAt: currentUser.heartbeatAt
   });
 
-  db.ref("attendance").push({
+  await pushAttendanceOnce({
     name: currentUser.name,
     code: currentUser.code,
     action: "course-enter",
     time: Date.now(),
-    courseName: currentUser.activeCourseName
+    courseName: currentUser.activeCourseName,
+    sessionToken: currentSessionToken
   });
 
   startSessionHeartbeat();
@@ -2216,13 +2449,14 @@ function escapeHtml(str) {
 function logHandAttendance(action, code, name, extras = {}) {
   if (!code || !name) return;
   const reason = extras.reason || (action === "hand-lower" ? "hand-lowered" : "hand-raised");
-  db.ref("attendance").push({
+  pushAttendanceOnce({
     name,
     code,
     action,
     time: Date.now(),
     reason,
-    courseName: extras.courseName || ""
+    courseName: extras.courseName || "",
+    sessionToken: extras.sessionToken || currentSessionToken
   });
 }
 
@@ -2579,6 +2813,10 @@ function syncAttendancePanelVisibilityByViewport() {
 
 syncAttendancePanelVisibilityByViewport();
 
+if (bestUsersSnapshotToggleBtn) {
+  bestUsersSnapshotToggleBtn.addEventListener("click", toggleBestUsersSnapshot);
+}
+
 attendanceHeaderBtn.addEventListener("click", () => {
   const isHidden = attendanceContent.classList.contains("hidden");
   if (isHidden) {
@@ -2675,7 +2913,15 @@ function initRealtimeDatabaseListeners() {
       lastOnlinePresenceSignature = usersSignature;
       scheduleImmediateStaleSessionSweep();
     }
-    const freshUsers = Object.values(users).filter(u => isPresenceFresh(u));
+    const freshUsers = Object.values(users)
+      .filter(u => isPresenceFresh(u))
+      .sort((a, b) => {
+        const bCourse = b.inCourse ? 1 : 0;
+        const aCourse = a.inCourse ? 1 : 0;
+        if (bCourse !== aCourse) return bCourse - aCourse;
+        if ((b.courseEnteredAt || 0) !== (a.courseEnteredAt || 0)) return (b.courseEnteredAt || 0) - (a.courseEnteredAt || 0);
+        return (b.start || 0) - (a.start || 0);
+      });
 
     refreshRaisedHandsBoard(freshUsers);
 
@@ -2688,6 +2934,7 @@ function initRealtimeDatabaseListeners() {
 
     if (freshUsers.length === 0) {
       usersList.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-secondary); font-size:13px;">No developers currently active in workspace.</div>';
+      renderWeeklyBestUsersSnapshot().catch(() => {});
       return;
     }
 
@@ -2695,10 +2942,13 @@ function initRealtimeDatabaseListeners() {
       const card = document.createElement("div");
       card.className = "user-card";
 
+      const roomJoinedLabel = u.start ? formatClockDateTime(u.start) : "—";
+      const courseJoinedLabel = u.inCourse && u.courseEnteredAt ? formatClockDateTime(u.courseEnteredAt) : "";
+
       let badgeHtml = "";
       if (u.inCourse) {
-        let pathTime = u.courseEnteredAt ? new Date(u.courseEnteredAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : "";
-        badgeHtml = `<span class="in-course-indicator-tag"><i class="bi bi-book-half"></i> ${u.activeCourseName || 'In Course'} (${pathTime})</span>`;
+        const pathTime = u.courseEnteredAt ? new Date(u.courseEnteredAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : "";
+        badgeHtml = `<span class="in-course-indicator-tag in-course-danger-tag"><i class="bi bi-mortarboard-fill"></i> ${u.activeCourseName || 'In Course'} (${pathTime})</span>`;
       }
 
       const isCurrentUserCard = currentUser && currentUser.id === u.id;
@@ -2712,6 +2962,10 @@ function initRealtimeDatabaseListeners() {
       card.innerHTML = `
         <div class="left-info-block">
           <div class="name">${escapeHtml(u.name)} ${badgeHtml} ${handStatusHtml}</div>
+          <div class="student-session-meta">
+            <span class="student-session-meta-line"><i class="bi bi-box-arrow-in-right"></i> Room joined: ${escapeHtml(roomJoinedLabel)}</span>
+            ${u.inCourse ? `<span class="student-session-meta-line course"><i class="bi bi-mortarboard-fill"></i> Course entered: ${escapeHtml(courseJoinedLabel)}</span>` : ''}
+          </div>
           <div class="live-elapsed-badge" data-start="${u.start}">00:00</div>
         </div>
         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
@@ -2726,6 +2980,7 @@ function initRealtimeDatabaseListeners() {
     });
 
     updateLiveCardElapsedTimers();
+    renderWeeklyBestUsersSnapshot().catch(() => {});
   });
   
   db.ref("attendance").on("value", () => {
@@ -2897,64 +3152,91 @@ window.toggleSeatBlock = async function(code) {
 };
 
 
+
 window.kickSeatUser = function(code) {
   if (!isAdminAuthenticated) return;
   openConfirmationModal(
     "Terminate Student Session",
     `Are you absolutely sure you want to eject the user from Seat ${code}?`,
     async () => {
-      const snap = await db.ref(`seats/${code}`).get();
-      if (snap.exists()) {
-        const userData = snap.val();
-        const endTime = Date.now();
-        const duration = Math.max(0, endTime - (userData.start || endTime));
-        const seatUserId = userData.id || userData.ownerId || "";
-        const seatToken = userData.sessionToken || "";
+      const [seatSnap, leaseSnap, usersSnap] = await Promise.all([
+        db.ref(`seats/${code}`).get(),
+        db.ref(`seatLeases/${code}`).get(),
+        db.ref("onlineUsers").get()
+      ]);
 
-        if (userData.inCourse) {
-          const courseSessionsSnap = await db.ref(COURSE_SESSION_COLLECTION).orderByChild('code').equalTo(code).get();
-          const courseSessions = courseSessionsSnap.val() || {};
-          const latestCourseId = Object.keys(courseSessions).sort((a, b) => (courseSessions[b].start || 0) - (courseSessions[a].start || 0))[0];
-          if (latestCourseId) {
-            await db.ref(`${COURSE_SESSION_COLLECTION}/${latestCourseId}`).update({
-              end: endTime,
-              duration: Math.max(0, endTime - (courseSessions[latestCourseId].start || endTime)),
-              status: 'admin-terminated',
-              endLabel: formatClockDateTime(endTime)
-            });
-          }
+      if (!seatSnap.exists() && !leaseSnap.exists()) {
+        toast(`Seat ${code} is already cleared.`, "info");
+        return;
+      }
+
+      const seatData = seatSnap.val() || {};
+      const leaseData = leaseSnap.val() || {};
+      const endTime = Date.now();
+      const duration = Math.max(0, endTime - (seatData.start || leaseData.start || endTime));
+      const seatToken = seatData.sessionToken || leaseData.sessionToken || "";
+      const seatUserId = seatData.id || seatData.ownerId || leaseData.ownerId || "";
+      const displayName = seatData.name || leaseData.name || getSeatDisplayName(code, "Unknown");
+
+      if (seatData.inCourse || leaseData.inCourse) {
+        const courseSessionsSnap = await db.ref(COURSE_SESSION_COLLECTION).orderByChild('code').equalTo(code).get();
+        const courseSessions = courseSessionsSnap.val() || {};
+        const latestCourseId = Object.keys(courseSessions).sort((a, b) => (courseSessions[b].start || 0) - (courseSessions[a].start || 0))[0];
+        if (latestCourseId) {
+          await db.ref(`${COURSE_SESSION_COLLECTION}/${latestCourseId}`).update({
+            end: endTime,
+            duration: Math.max(0, endTime - (courseSessions[latestCourseId].start || endTime)),
+            status: 'admin-terminated',
+            endLabel: formatClockDateTime(endTime)
+          }).catch(() => {});
         }
+      }
 
+      const onlineRemovals = [];
+      const onlineUsers = usersSnap.val() || {};
+      Object.entries(onlineUsers).forEach(([userId, user]) => {
+        if (!user) return;
+        const matchesSeat = user.code === code || user.seat === code;
+        const matchesToken = seatToken && user.sessionToken === seatToken;
+        const matchesOwner = seatUserId && (userId === seatUserId || user.id === seatUserId || user.ownerId === seatUserId);
+        if (matchesSeat || matchesToken || matchesOwner) {
+          onlineRemovals.push(db.ref(`onlineUsers/${userId}`).remove().catch(() => {}));
+        }
+      });
+
+      await Promise.all([
+        db.ref(`seatLeases/${code}`).remove().catch(() => {}),
+        db.ref(`seats/${code}`).remove().catch(() => {}),
+        ...onlineRemovals
+      ]);
+
+      await pushAttendanceOnce({
+        name: displayName,
+        code,
+        action: "terminated",
+        time: endTime,
+        sessionDuration: duration,
+        reason: "admin-kick",
+        sessionToken: seatToken
+      });
+
+      if (seatToken) {
         await Promise.all([
-          db.ref(`seatLeases/${code}`).remove().catch(() => {}),
-          db.ref(`seats/${code}`).remove().catch(() => {}),
-          seatUserId ? db.ref(`onlineUsers/${seatUserId}`).remove().catch(() => {}) : Promise.resolve()
-        ]);
-
-        await db.ref("attendance").push({
-          name: userData.name,
-          code,
-          action: "terminated",
-          time: endTime,
-          sessionDuration: duration,
-          reason: "admin-kick"
-        });
-
-        if (seatToken) {
           db.ref(`seatLeases/${code}`).transaction((cur) => {
             if (cur && cur.sessionToken === seatToken) return null;
             return cur;
-          }).catch(() => {});
-        }
-
-        toast(`Seat ${code} cleared by administrative command.`, "info");
+          }).catch(() => {}),
+          db.ref(`seats/${code}`).transaction((cur) => {
+            if (cur && cur.sessionToken === seatToken) return null;
+            return cur;
+          }).catch(() => {})
+        ]);
       }
+
+      toast(`Seat ${code} cleared by administrative command.`, "info");
     }
   );
 };
-
-
-// ==========================================================================
 // RECAP MATRIX CONTROLLERS 
 // ==========================================================================
 mobileStudyRecapBtn.addEventListener("click", () => {
