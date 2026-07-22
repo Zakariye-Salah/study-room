@@ -672,12 +672,15 @@
   /* RIGHT COLUMN / DESKTOP GRID POSITIONING */
 .live-activity {
   align-self: start;
+  min-height: auto;
+  height: auto;
 }
 
 .live-students-container {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
 .live-students-container > .section-title {
@@ -702,6 +705,8 @@
   .control-panel,
   .live-activity {
     align-self: start;
+    min-height: auto;
+    height: auto;
   }
 
   #handRaiseBoard {
@@ -1248,13 +1253,15 @@
      STUDENT ONLINE CARDS DASHBOARD
      ========================================================================== */
   .students-list-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    max-height: 420px;
-    overflow-y: auto;
-    padding-right: 4px;
-  }
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+  transition: max-height 0.25s ease;
+  flex: 0 0 auto;
+}
   
   .user-card {
     background: var(--bg-surface-elevated);
@@ -2608,4 +2615,252 @@
 }
 body {
   padding-bottom: 90px;
+}
+
+
+/* ==========================================================================
+   STUDENT SESSION META + WEEKLY SNAPSHOT PANEL
+   ========================================================================== */
+.live-activity {
+  align-self: stretch;
+  min-height: auto;
+}
+
+.live-students-container {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.students-list-grid {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.student-session-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+.student-session-meta-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.student-session-meta-line.course {
+  color: #ef4444;
+  font-weight: 800;
+}
+
+.in-course-danger-tag {
+  background: rgba(239, 68, 68, 0.14);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.32);
+}
+
+.best-users-snapshot-panel {
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.best-users-snapshot-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.best-users-snapshot-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  padding: 0;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.best-users-snapshot-toggle:hover {
+  color: var(--color-primary);
+}
+
+.best-users-snapshot-toggle span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.best-users-snapshot-header h3 {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.best-users-snapshot-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+.best-users-snapshot-body {
+  display: block;
+}
+
+.best-users-snapshot-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.best-users-snapshot-box {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 10px;
+  min-height: 132px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.best-users-snapshot-box-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mini-rank-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mini-rank-row {
+  display: grid;
+  grid-template-columns: 38px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 9px;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+}
+
+.mini-rank-index {
+  font-size: 11px;
+  font-weight: 900;
+  color: var(--color-primary);
+}
+
+.mini-rank-body {
+  min-width: 0;
+}
+
+.mini-rank-name {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mini-rank-seat {
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.online-empty-state {
+  text-align: center;
+  padding: 20px 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+  border: 1px dashed var(--border-color);
+  border-radius: 14px;
+  background: var(--bg-surface-elevated);
+}
+
+.presence-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.2px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.presence-status-online {
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.22);
+}
+
+.presence-status-course {
+  background: rgba(239, 68, 68, 0.14);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
+.mini-rank-time {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--color-success);
+  white-space: nowrap;
+}
+
+.mini-rank-empty {
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 14px 8px;
+}
+
+@media (min-width: 901px) {
+  .students-list-grid {
+    max-height: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .best-users-snapshot-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .students-list-grid {
+    max-height: 520px;
+  }
+
+  .live-activity {
+    min-height: auto;
+  }
 }
