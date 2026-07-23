@@ -66,6 +66,32 @@
     box-sizing: border-box;
   }
   
+  html,
+body {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+.panel-card,
+.user-card,
+.clean-attendance-row,
+.stat-card,
+.live-activity,
+.control-panel,
+.dashboard-grid > *,
+.students-list-grid > * {
+    min-width: 0;
+    max-width: 100%;
+}
+
+
   body {
     background-color: var(--bg-main);
     color: var(--text-primary);
@@ -81,9 +107,7 @@
     scroll-behavior: smooth;
   }
   
-  body.modal-open {
-    overflow: hidden;
-  }
+
   
   .app-container {
     max-width: 1250px;
@@ -100,7 +124,7 @@
      ========================================================================== */
   .main-header {
     position: fixed;
-    top: 16px;
+    top: 1px;
     left: 50%;
     transform: translateX(-50%);
     width: calc(100% - 40px);
@@ -660,8 +684,11 @@
     display: grid;
     grid-template-columns: 1fr 1.3fr;
     gap: 20px;
-    width: 100%;
+    width:100%;
+    max-width:100%;
   }
+
+  
   
   @media (max-width: 900px) {
     .dashboard-grid {
@@ -1952,7 +1979,7 @@
     .main-header {
       width: calc(100% - 24px);
       padding: 10px 14px;
-      top: 10px;
+      top: 3px;
       border-radius: 12px;
     }
   
@@ -2420,6 +2447,42 @@
   max-height: none;
 }
 
+.clean-attendance-row{
+  width:100%;
+  max-width:100%;
+  overflow:hidden;
+}
+
+.clean-att-left{
+  min-width:0;
+  flex:1;
+}
+
+.clean-att-name{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.clean-att-time{
+  flex-shrink:0;
+}
+
+
+.user-card{
+  width:100%;
+  overflow:hidden;
+}
+
+.left-info-block{
+  min-width:0;
+}
+
+.left-info-block .name{
+  overflow:hidden;
+  white-space:nowrap;
+  text-overflow:ellipsis;
+}
 .report-summary-card {
   position: relative;
   overflow: hidden;
