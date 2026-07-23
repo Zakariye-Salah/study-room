@@ -229,6 +229,7 @@ let bestUsersSnapshotExpanded = localStorage.getItem("best_users_snapshot_expand
 let attendanceRefreshInterval = null;
 let staleSessionMonitorInterval = null;
 let immediateStaleSweepTimeout = null;
+let immediateStaleSweepForce = false;
 let lastSeatsPresenceSignature = "";
 let lastOnlinePresenceSignature = "";
 const ATTENDANCE_REFRESH_INTERVAL_MS = 10000; // safer for Firebase free plan
@@ -808,23 +809,73 @@ function getMostRecentPresenceTimestamp(user = {}) {
 
 async function claimSessionExitOnce(code, sessionToken, reason, exitTime = Date.now()) {
   if (!code || !sessionToken) return { claimed: false, exitTime };
-  const leaseRef = db.ref(`seatLeases/${code}`);
+  const claimRef = db.ref(`sessionExitClaims/${code}`);
   let claimed = false;
-  await leaseRef.transaction((current) => {
-    if (!current || current.sessionToken !== sessionToken) return current;
-    if (current.exitLoggedAt || current.exitPending || current.disconnectRequestedAt) return current;
+
+  await claimRef.transaction((current) => {
+    if (current && current.sessionToken === sessionToken && current.exitLoggedAt) {
+      return current;
+    }
+
     claimed = true;
     return {
-      ...current,
+      code,
+      sessionToken,
       exitPending: true,
       exitPendingAt: exitTime,
       exitPendingReason: reason,
       exitLoggedAt: exitTime,
-      exitReason: reason
+      exitReason: reason,
+      updatedAt: exitTime
     };
   }).catch(() => {});
+
   return { claimed, exitTime };
 }
+
+
+function getFinalExitAttendanceAction({ wasInCourse = false, wasHandRaised = false, explicitAction = "" } = {}) {
+  const normalizedExplicit = String(explicitAction || "").toLowerCase();
+  if (normalizedExplicit === "course-leave" || normalizedExplicit === "hand-lower" || normalizedExplicit === "leave") {
+    return normalizedExplicit;
+  }
+  if (wasHandRaised) return "hand-lower";
+  if (wasInCourse) return "course-leave";
+  return "leave";
+}
+
+function buildOfflineExitStamp({
+  roomJoinedAt = 0,
+  leaveTime = Date.now(),
+  exitReason = "leave",
+  courseEnteredAt = 0,
+  activeCourseName = "",
+  sessionToken = ""
+} = {}) {
+  const joinedAt = Number.isFinite(roomJoinedAt) && roomJoinedAt > 0 ? roomJoinedAt : leaveTime;
+  const closedAt = Number.isFinite(leaveTime) && leaveTime > 0 ? leaveTime : Date.now();
+  return {
+    handRaised: false,
+    handRaisedAt: 0,
+    inCourse: false,
+    activeCourseName: "",
+    courseEnteredAt: 0,
+    roomJoinedAt: joinedAt,
+    joinedAt,
+    start: joinedAt,
+    lastSeen: closedAt,
+    heartbeatAt: closedAt,
+    leftAt: closedAt,
+    exitPending: true,
+    exitLoggedAt: closedAt,
+    disconnectRequestedAt: closedAt,
+    exitReason,
+    status: "offline",
+    expiresAt: joinedAt + SESSION_LIMIT,
+    sessionToken
+  };
+}
+
 
 
 async function syncBrowserVisibilityState() {
@@ -1144,38 +1195,15 @@ async function closeStalePresenceSession(seatData, leaseData = null) {
 
   const courseDuration = Math.max(0, Math.min(SESSION_LIMIT, closureTime - courseEnteredAt));
   const roomDuration = Math.max(0, Math.min(SESSION_LIMIT, closureTime - roomJoinedAt));
-  const finalStatus = "offline";
-  const offlineStamp = {
-    handRaised: false,
-    handRaisedAt: 0,
-    inCourse: false,
-    activeCourseName: "",
-    courseEnteredAt: 0,
+  const finalAction = getFinalExitAttendanceAction({ wasInCourse, wasHandRaised });
+  const offlineStamp = buildOfflineExitStamp({
     roomJoinedAt,
-    joinedAt: roomJoinedAt,
-    start: roomJoinedAt,
-    lastSeen: closureTime,
-    heartbeatAt: closureTime,
-    leftAt: closureTime,
-    exitPending: true,
-    exitLoggedAt: closureTime,
-    disconnectRequestedAt: closureTime,
+    leaveTime: closureTime,
     exitReason,
-    status: finalStatus,
-    expiresAt: roomJoinedAt + SESSION_LIMIT
-  };
-
-  if (wasHandRaised) {
-    await pushAttendanceOnce({
-      name,
-      code,
-      action: "hand-lower",
-      time: closureTime,
-      reason: exitReason,
-      courseName: activeCourseName,
-      sessionToken
-    });
-  }
+    courseEnteredAt,
+    activeCourseName,
+    sessionToken
+  });
 
   if (wasInCourse) {
     await finalizeCourseSessionsForPresence({
@@ -1189,29 +1217,16 @@ async function closeStalePresenceSession(seatData, leaseData = null) {
       name,
       currentSessionId: currentCourseSessionId
     });
-
-    await pushAttendanceOnce({
-      name,
-      code,
-      action: "course-leave",
-      time: closureTime,
-      joinedAt: roomJoinedAt,
-      leftAt: closureTime,
-      sessionDuration: courseDuration,
-      reason: exitReason,
-      courseName: activeCourseName,
-      sessionToken
-    });
   }
 
   await pushAttendanceOnce({
     name,
     code,
-    action: "terminated",
+    action: finalAction,
     time: closureTime,
     joinedAt: roomJoinedAt,
     leftAt: closureTime,
-    sessionDuration: roomDuration,
+    sessionDuration: finalAction === "course-leave" ? courseDuration : roomDuration,
     reason: exitReason,
     courseName: activeCourseName,
     sessionToken
@@ -1222,31 +1237,15 @@ async function closeStalePresenceSession(seatData, leaseData = null) {
 
   await Promise.all(updateTargets.map(ref => ref.update(offlineStamp).catch(() => {})));
 
-  if (wasHandRaised) {
-    await db.ref(`seatLeases/${code}`).update({
-      handRaised: false,
-      handRaisedAt: 0
-    }).catch(() => {});
-    await db.ref(`seats/${code}`).update({
-      handRaised: false,
-      handRaisedAt: 0
-    }).catch(() => {});
-    if (seatUserId) {
-      await db.ref(`onlineUsers/${seatUserId}`).update({
-        handRaised: false,
-        handRaisedAt: 0
-      }).catch(() => {});
-    }
-  }
-
   await db.ref(`weeklyHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + roomDuration).catch(() => {});
-  await db.ref(`weeklyCourseHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + courseDuration).catch(() => {});
+  await db.ref(`weeklyCourseHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + (wasInCourse ? courseDuration : 0)).catch(() => {});
   await db.ref(`dailyHours/${getTodayIdentifier()}/${code}`).transaction(v => (v || 0) + roomDuration).catch(() => {});
   await db.ref(`monthlyHours/${getMonthIdentifier()}/${code}`).transaction(v => (v || 0) + roomDuration).catch(() => {});
   await db.ref(`allTimeHours/${code}`).transaction(v => (v || 0) + roomDuration).catch(() => {});
 
   return true;
 }
+
 
 // ==========================================================================
 
@@ -1702,25 +1701,22 @@ function formatAttendanceActionLabel(event) {
     iconClass = 'icon-leave';
     const durationText = event.sessionDuration ? formatSessionDuration(event.sessionDuration) : '0m';
     body = `${nameHtml} left the course ${seatHtml} <span class="clean-att-duration-pill">${durationText}</span>`;
+    if (event.reason) {
+      body += ` <span class="clean-att-duration-pill">${escapeHtml(event.reason)}</span>`;
+    }
   } else if (event.action === 'hand-raise') {
     icon = 'bi-hand-index-thumb';
     iconClass = 'icon-hand-raise';
-    body = `${nameHtml} raised hand ✋ ${seatHtml}`;
+    body = `${nameHtml} raised the ✋️ ${seatHtml}`;
   } else if (event.action === 'hand-lower') {
     icon = 'bi-hand-index-thumb';
     iconClass = 'icon-hand-lower';
-    body = `${nameHtml} lowered hand ✋ ${seatHtml}`;
-  } else if (event.action === 'leave' || event.action === 'terminated') {
-    const isAutoEx = String(event.action || '').includes('expired') || String(event.reason || '').includes('page-close') || String(event.reason || '').includes('tab-closed') || String(event.reason || '').includes('removed') || String(event.reason || '').includes('auto-synced');
-    icon = isAutoEx ? 'bi-box-arrow-left' : 'bi-box-arrow-left';
-    iconClass = 'icon-leave';
-    body = `${nameHtml} left the room ${seatHtml}`;
+    body = `${nameHtml} lowered the hand ✋️ ${seatHtml}`;
     if (event.reason) {
       body += ` <span class="clean-att-duration-pill">${escapeHtml(event.reason)}</span>`;
     }
   } else {
-    const isAutoEx = String(event.action || '').includes('expired') || String(event.reason || '').includes('page-close') || String(event.reason || '').includes('tab-closed') || String(event.reason || '').includes('removed') || String(event.reason || '').includes('auto-synced');
-    icon = isAutoEx ? 'bi-hourglass-bottom' : 'bi-box-arrow-left';
+    icon = 'bi-box-arrow-left';
     iconClass = 'icon-leave';
     body = `${nameHtml} left the room ${seatHtml}`;
     if (event.reason) {
@@ -1730,6 +1726,7 @@ function formatAttendanceActionLabel(event) {
 
   return { body, icon, iconClass, timeStr };
 }
+
 
 function renderAttendanceRow(event) {
   const rowBlock = document.createElement("div");
@@ -2509,15 +2506,19 @@ function downloadAttendanceReportPdf() {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-function scheduleImmediateStaleSessionSweep() {
+function scheduleImmediateStaleSessionSweep(force = false) {
   clearTimeout(immediateStaleSweepTimeout);
+  immediateStaleSweepForce = immediateStaleSweepForce || !!force;
   immediateStaleSweepTimeout = setTimeout(() => {
+    const shouldForce = immediateStaleSweepForce;
     immediateStaleSweepTimeout = null;
-    sweepStaleSessions().catch(() => {});
+    immediateStaleSweepForce = false;
+    sweepStaleSessions({ force: shouldForce }).catch(() => {});
   }, 0);
 }
 
-async function sweepStaleSessions() {
+async function sweepStaleSessions(options = {}) {
+  const { force = false } = options;
   try {
     const [seatsSnap, leasesSnap, onlineSnap] = await Promise.all([
       db.ref("seats").get(),
@@ -2539,11 +2540,19 @@ async function sweepStaleSessions() {
       const merged = { ...onlineMatch, ...leaseData, ...seatData, code };
       const sessionToken = merged.sessionToken || leaseData?.sessionToken || seatData.sessionToken;
       if (!sessionToken) continue;
-      if ((isPresenceFresh(merged) || merged.exitLoggedAt) && !isSessionOverLimit(merged)) continue;
+      if (!force && (isPresenceFresh(merged) || merged.exitLoggedAt) && !isSessionOverLimit(merged)) continue;
       await closeStalePresenceSession(merged, leaseData);
     }
   } catch (_) {}
 }
+
+function startStaleSessionMonitor() {
+  if (staleSessionMonitorInterval) clearInterval(staleSessionMonitorInterval);
+  staleSessionMonitorInterval = setInterval(() => {
+    sweepStaleSessions().catch(() => {});
+  }, 60000);
+}
+
 
 function startAttendanceAutoRefresh() {
   if (attendanceRefreshInterval) clearInterval(attendanceRefreshInterval);
@@ -2899,62 +2908,43 @@ async function leaveRoom(auto = false, reason = "leave") {
     const wasInCourse = !!currentUser.inCourse;
     const wasHandRaised = !!currentUser.handRaised;
     const activeCourseName = currentUser.activeCourseName || "Full Stack AI Engineer";
-    const exitClaim = await claimSessionExitOnce(code, liveToken, auto ? "stale-session-sweep" : reason, leaveTime);
 
-    if (wasHandRaised) {
-      currentUser.handRaised = false;
-      currentUser.handRaisedAt = 0;
-      const loweredPayload = buildPresencePayload({ handRaised: false, handRaisedAt: 0, status: currentUser.inCourse ? "in-course" : "active" });
-      await Promise.all([
-        db.ref(`onlineUsers/${id}`).update(loweredPayload).catch(() => {}),
-        db.ref(`seats/${code}`).update(loweredPayload).catch(() => {})
-      ]);
-      logHandAttendance("hand-lower", code, name, { reason: auto ? "room-leave-auto" : "room-leave", time: leaveTime });
+    const exitClaim = await claimSessionExitOnce(code, liveToken, auto ? "stale-session-sweep" : reason, leaveTime);
+    if (!exitClaim.claimed && !currentUser.leftAt && !currentUser.exitLoggedAt && !isSessionOverLimit(currentUser)) {
+      return;
     }
+
+    const finalAction = getFinalExitAttendanceAction({ wasInCourse, wasHandRaised });
+    const offlineStamp = buildOfflineExitStamp({
+      roomJoinedAt,
+      leaveTime,
+      exitReason: auto ? "stale-session-sweep" : reason,
+      courseEnteredAt,
+      activeCourseName,
+      sessionToken: liveToken
+    });
 
     if (wasInCourse) {
-      await leaveCourse(true, "room-leave", {
-        silent: true,
-        skipConfirm: true,
-        allowDuringTeardown: true,
-        suppressAttendanceLog: true,
-        leaveTime
-      });
-
-      await pushAttendanceOnce({
-        name,
-        code,
-        action: auto ? "terminated" : "course-leave",
-        time: leaveTime,
-        joinedAt: roomJoinedAt,
-        leftAt: leaveTime,
-        sessionDuration: courseDuration,
-        reason: auto ? "room-leave-auto" : "room-leave",
-        courseName: activeCourseName,
-        sessionToken: liveToken
-      });
+      await finalizeActiveCourseSession(auto ? "terminated" : reason, courseEnteredAt, leaveTime);
     }
 
-    const exitStamp = {
-      exitLoggedAt: leaveTime,
-      exitReason: auto ? "stale-session-sweep" : reason,
-      lastSeen: leaveTime,
-      heartbeatAt: leaveTime,
-      inCourse: false,
-      activeCourseName: "",
-      roomJoinedAt,
+    await pushAttendanceOnce({
+      name,
+      code,
+      action: finalAction,
+      time: leaveTime,
       joinedAt: roomJoinedAt,
-      start: roomJoinedAt,
-      courseEnteredAt: 0,
       leftAt: leaveTime,
-      status: "offline",
-      expiresAt: roomJoinedAt + SESSION_LIMIT
-    };
+      sessionDuration: finalAction === "course-leave" ? courseDuration : sessionDuration,
+      reason: auto ? "stale-session-sweep" : reason,
+      courseName: activeCourseName,
+      sessionToken: liveToken
+    });
 
     await Promise.all([
-      db.ref(`seatLeases/${code}`).update(exitStamp).catch(() => {}),
-      db.ref(`seats/${code}`).update(exitStamp).catch(() => {}),
-      db.ref(`onlineUsers/${id}`).update(exitStamp).catch(() => {})
+      db.ref(`seatLeases/${code}`).update(offlineStamp).catch(() => {}),
+      db.ref(`seats/${code}`).update(offlineStamp).catch(() => {}),
+      db.ref(`onlineUsers/${id}`).update(offlineStamp).catch(() => {})
     ]);
 
     await cancelSessionDisconnectHandlers(code, id);
@@ -2972,37 +2962,11 @@ async function leaveRoom(auto = false, reason = "leave") {
     db.ref("onlineUsers/" + id).off();
     db.ref("seatLeases/" + code).off();
 
-    await db.ref(`weeklyHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
-    await db.ref(`weeklyCourseHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + courseDuration);
-    await db.ref(`dailyHours/${getTodayIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
-    await db.ref(`monthlyHours/${getMonthIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
-    await db.ref(`allTimeHours/${code}`).transaction(v => (v || 0) + sessionDuration);
-
-    await db.ref("seatLeases/" + code).transaction((cur) => {
-      if (!cur || (liveToken && cur.sessionToken === liveToken)) return null;
-      return cur;
-    }).catch(() => {});
-    await db.ref("seats/" + code).transaction((cur) => {
-      if (!cur || (liveToken && cur.sessionToken === liveToken)) return null;
-      return cur;
-    }).catch(() => {});
-    await db.ref("onlineUsers/" + id).transaction((cur) => {
-      if (!cur || (liveToken && cur.sessionToken === liveToken)) return null;
-      return cur;
-    }).catch(() => {});
-
-    await pushAttendanceOnce({
-      name: name,
-      code: code,
-      action: auto ? "terminated" : "leave",
-      time: leaveTime,
-      joinedAt: roomJoinedAt,
-      leftAt: leaveTime,
-      sessionDuration,
-      start: roomJoinedAt,
-      reason: auto ? "stale-session-sweep" : reason,
-      sessionToken: liveToken
-    });
+    await db.ref(`weeklyHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration).catch(() => {});
+    await db.ref(`weeklyCourseHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + (wasInCourse ? courseDuration : 0)).catch(() => {});
+    await db.ref(`dailyHours/${getTodayIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration).catch(() => {});
+    await db.ref(`monthlyHours/${getMonthIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration).catch(() => {});
+    await db.ref(`allTimeHours/${code}`).transaction(v => (v || 0) + sessionDuration).catch(() => {});
 
     toast(auto ? "Session closed after the browser stopped sending heartbeats." : "Workspace link destroyed successfully.", "info");
     clearActiveSessionStorage();
@@ -3015,6 +2979,7 @@ async function leaveRoom(auto = false, reason = "leave") {
     isSessionTeardownInProgress = false;
   }
 }
+
 
 
 function listenToActiveKicks
@@ -3801,6 +3766,10 @@ function initRealtimeDatabaseListeners() {
       onlineCount.innerText = onlineCountValue;
       onlineCount.classList.toggle("counter-online", onlineCountValue > 0);
       onlineCount.classList.toggle("counter-offline", onlineCountValue === 0);
+    }
+
+    if (onlineCountValue === 0) {
+      scheduleImmediateStaleSessionSweep(true);
     }
 
     if (freshUsers.length === 0) {
