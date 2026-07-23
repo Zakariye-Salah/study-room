@@ -21,7 +21,7 @@ const SEATS = {
   "02": { name: "Eng Osman", pin: "2222" },
   "03": { name: "Eng Zaki", pin: "3333" },
   "04": { name: "Eng Abdi", pin: "4444" },
-  "05": { name: "Eng Hassan", pin: "5555" }
+  "05": { name: "Eng Shafie", pin: "1234" }
 };
 
 // SESSION LIMITS & AUTO-KICK CONFIGURATION
@@ -56,6 +56,18 @@ const bestUsersSnapshotPanel = document.getElementById("bestUsersSnapshotPanel")
 const bestUsersSnapshotToggleBtn = document.getElementById("bestUsersSnapshotToggleBtn");
 const bestUsersSnapshotBody = document.getElementById("bestUsersSnapshotBody");
 const bestUsersSnapshotChevron = document.getElementById("bestUsersSnapshotChevron");
+const bestUsersHistoryBtn = document.getElementById("bestUsersHistoryBtn");
+
+const rankCelebrationModalOverlay = document.getElementById("rankCelebrationModalOverlay");
+const closeRankCelebrationModalBtn = document.getElementById("closeRankCelebrationModalBtn");
+const rankCelebrationCloseBtn = document.getElementById("rankCelebrationCloseBtn");
+const rankCelebrationTitle = document.getElementById("rankCelebrationTitle");
+const rankCelebrationBody = document.getElementById("rankCelebrationBody");
+
+const bestUsersHistoryModalOverlay = document.getElementById("bestUsersHistoryModalOverlay");
+const closeBestUsersHistoryModalBtn = document.getElementById("closeBestUsersHistoryModalBtn");
+const bestUsersHistoryCloseBtn = document.getElementById("bestUsersHistoryCloseBtn");
+const bestUsersHistoryList = document.getElementById("bestUsersHistoryList");
 
 const attendanceHeaderBtn = document.getElementById("attendanceHeaderBtn");
 const attendanceChevron = document.getElementById("attendanceChevron");
@@ -248,34 +260,49 @@ function persistAttendanceEventSignatureCache() {
   } catch (_) {}
 }
 
+function normalizeSeatCode(code = "") {
+  const raw = String(code || "").trim();
+  if (!raw) return "--";
+  if (/^\d+$/.test(raw)) return raw.padStart(2, "0");
+  return raw;
+}
+
+function getCanonicalSeatName(code = "", fallback = "Unknown") {
+  const safeCode = normalizeSeatCode(code);
+  const seat = SEATS[safeCode];
+  if (seat && seat.name) return seat.name;
+  return fallback || "Unknown";
+}
+
 function getSeatDisplayName(code = "", fallback = "Unknown") {
-  return (SEATS[code] && SEATS[code].name) ? SEATS[code].name : (fallback || "Unknown");
+  return getCanonicalSeatName(code, fallback);
 }
 
 function normalizeAttendanceEvent(event = {}) {
-  const code = event.code || "--";
+  const code = normalizeSeatCode(event.code || "--");
   return {
     ...event,
     code,
-    name: event.name || getSeatDisplayName(code, "Unknown")
+    name: getCanonicalSeatName(code, event.name || "Unknown")
   };
 }
 
 function buildAttendanceEventKey(event = {}) {
   const action = String(event.action || "").toLowerCase();
-  const code = event.code || "--";
+  const code = normalizeSeatCode(event.code || "--");
   const sessionToken = event.sessionToken || event.sessionId || event.token || currentSessionToken || "";
-  const eventTime = Number.isFinite(event.time) ? Math.floor(event.time / 1000) : "";
+  const eventTime = Number.isFinite(event.time) ? String(event.time) : "";
   const reason = String(event.reason || "").toLowerCase();
   const courseName = String(event.courseName || event.activeCourseName || "").toLowerCase();
-  const start = Number.isFinite(event.start) ? Math.floor(event.start / 1000) : "";
+  const start = Number.isFinite(event.start) ? String(event.start) : "";
   const handRaised = event.handRaised ? "1" : "0";
-  return [action, code, sessionToken, eventTime || start, reason, courseName, handRaised].join("|");
+  const roomJoinedAt = Number.isFinite(event.roomJoinedAt) ? String(event.roomJoinedAt) : "";
+  return [action, code, sessionToken, eventTime || start || roomJoinedAt, reason, courseName, handRaised].join("|");
 }
 
 function buildAttendanceEventSignature(event = {}) {
   const action = String(event.action || "").toLowerCase();
-  const code = event.code || "--";
+  const code = normalizeSeatCode(event.code || "--");
   const sessionToken = event.sessionToken || event.sessionId || event.token || currentSessionToken || "";
   const reason = String(event.reason || "").toLowerCase();
   const courseName = String(event.courseName || event.activeCourseName || "").toLowerCase();
@@ -433,6 +460,7 @@ setupPasswordFieldToggleDriver("toggleAdminEye", "adminPassword");
 setupPasswordFieldToggleDriver("toggleNewPinEye", "newPinInputField");
 
 setBestUsersSnapshotExpanded(bestUsersSnapshotExpanded);
+syncBestUsersSnapshotActionVisibility();
 
 // ==========================================================================
 // MODAL & DIALOG SYSTEMS
@@ -537,40 +565,99 @@ function formatHoursMinutes(ms) {
 }
 
 function formatLiveSeconds(ms) {
-  const totalSecs = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSecs / 60);
-  const secs = totalSecs % 60;
-  return `${minutes}m ${secs}s`;
+  return formatElapsedDuration(ms);
 }
 
 function pad2(num) {
   return String(num).padStart(2, '0');
 }
 
+
 function formatClockDateTime(timestamp) {
-  const d = new Date(timestamp);
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const today = new Date();
-  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-  const startOfYesterday = startOfToday - 86400000;
-  const stampDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  if (stampDay === startOfToday) return `Today ${time}`;
-  if (stampDay === startOfYesterday) return `Yesterday ${time}`;
+  return formatAbsoluteDateTime(timestamp);
+}
+
+function formatAbsoluteDateTime(timestamp) {
+  const value = Number(timestamp);
+  if (!Number.isFinite(value) || value <= 0) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+
+  const year = d.getFullYear();
+  const month = pad2(d.getMonth() + 1);
   const day = pad2(d.getDate());
-  const month = d.toLocaleDateString([], { month: 'short' });
-  return `${day}/${month} ${time}`;
+  let hour = d.getHours();
+  const minute = pad2(d.getMinutes());
+  const suffix = hour >= 12 ? "PM" : "AM";
+  hour = hour % 12;
+  if (hour === 0) hour = 12;
+
+  return `${year}-${month}-${day} ${pad2(hour)}:${minute} ${suffix}`;
+}
+
+function formatElapsedDuration(ms) {
+  const safeMs = Number.isFinite(ms) && ms > 0 ? ms : 0;
+  const totalSeconds = Math.floor(safeMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) return `${hours}h ${pad2(minutes)}m`;
+  if (minutes > 0) return `${minutes}m ${pad2(seconds)}s`;
+  return `${seconds}s`;
 }
 
 function formatSessionDuration(ms) {
-  if (!Number.isFinite(ms) || ms < 0) ms = 0;
-  const totalMinutes = Math.floor(ms / 60000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours <= 0) return `${minutes}m`;
-  return `${hours}:${pad2(minutes)}m`;
+  return formatElapsedDuration(ms);
+}
+
+function getSessionRoomStartTimestamp(session = {}, fallback = Date.now()) {
+  const candidates = [
+    session?.joinedAt,
+    session?.roomJoinedAt,
+    session?.start,
+    session?.createdAt,
+    session?.enteredAt,
+    session?.joinedTimestamp
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  const safeFallback = Number(fallback);
+  return Number.isFinite(safeFallback) && safeFallback > 0 ? safeFallback : Date.now();
+}
+
+function getSessionCourseStartTimestamp(session = {}, fallback = null) {
+  const candidates = [
+    session?.courseEnteredAt,
+    session?.courseJoinedAt,
+    session?.courseStartedAt,
+    session?.lessonEnteredAt
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return getSessionRoomStartTimestamp(session, fallback ?? Date.now());
+}
+
+function getSessionExpiryTimestamp(session = {}, fallback = Date.now()) {
+  const explicit = Number(session?.expiresAt);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  return getSessionRoomStartTimestamp(session, fallback) + SESSION_LIMIT;
+}
+
+function getElapsedSessionMsFromUser(session = {}, now = Date.now()) {
+  return Math.max(0, now - getSessionRoomStartTimestamp(session, now));
+}
+
+function getElapsedCourseMsFromUser(session = {}, now = Date.now()) {
+  return Math.max(0, now - getSessionCourseStartTimestamp(session, now));
 }
 
 function getRangeBounds(range) {
+
   const now = new Date();
   const end = new Date(now);
   end.setHours(23, 59, 59, 999);
@@ -644,30 +731,49 @@ function clearActiveSessionStorage() {
 
 function buildPresencePayload(extra = {}) {
   if (!currentUser) return null;
+
+  const now = Date.now();
+  const joinedAt = getSessionRoomStartTimestamp(currentUser, now);
+  const courseStartedAt = getSessionCourseStartTimestamp(currentUser, joinedAt);
+  const status = currentUser.inCourse ? "in-course" : "active";
+  const expiresAt = getSessionExpiryTimestamp(currentUser, joinedAt);
+
   return {
     ...currentUser,
     ...extra,
-    lastSeen: Date.now(),
-    heartbeatAt: Date.now(),
+    joinedAt,
+    roomJoinedAt: joinedAt,
+    start: joinedAt,
+    courseEnteredAt: currentUser.courseEnteredAt || courseStartedAt,
+    lastSeen: now,
+    heartbeatAt: now,
+    leftAt: 0,
+    status: extra.status || status,
+    expiresAt,
     deviceId: currentDeviceId,
     tabId: currentTabId,
     sessionToken: currentSessionToken,
     visibilityState: getCurrentVisibilityState(),
     inCourse: !!currentUser.inCourse,
-    courseEnteredAt: currentUser.courseEnteredAt || 0,
-    activeCourseName: currentUser.activeCourseName || ""
+    activeCourseName: currentUser.activeCourseName || "",
+    exitPending: false,
+    exitLoggedAt: 0,
+    disconnectRequestedAt: 0
   };
 }
 
 function buildDisconnectTombstone(reason = "tab-close") {
+  const now = Date.now();
   return {
     exitPending: true,
-    disconnectRequestedAt: Date.now(),
+    disconnectRequestedAt: now,
     disconnectReason: reason,
     lastSeen: 0,
     heartbeatAt: 0,
-    exitLoggedAt: 0,
-    exitReason: reason
+    exitLoggedAt: now,
+    exitReason: reason,
+    leftAt: now,
+    status: "offline"
   };
 }
 
@@ -679,8 +785,25 @@ function getCurrentVisibilityState() {
   }
 }
 
+
 function getPresenceGraceWindow(user) {
   return user && user.visibilityState === "hidden" ? HIDDEN_PRESENCE_GRACE_MS : ACTIVE_PRESENCE_GRACE_MS;
+}
+
+function getMostRecentPresenceTimestamp(user = {}) {
+  const candidates = [
+    user.lastSeen,
+    user.heartbeatAt,
+    user.updatedAt,
+    user.joinedAt,
+    user.roomJoinedAt,
+    user.start
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return 0;
 }
 
 async function claimSessionExitOnce(code, sessionToken, reason, exitTime = Date.now()) {
@@ -703,14 +826,20 @@ async function claimSessionExitOnce(code, sessionToken, reason, exitTime = Date.
   return { claimed, exitTime };
 }
 
+
 async function syncBrowserVisibilityState() {
   if (!currentUser || !currentSessionToken || !currentUser.code || !currentUser.id) return;
   const visibilityState = getCurrentVisibilityState();
+  const now = Date.now();
   const payload = {
     visibilityState,
-    lastSeen: Date.now(),
-    heartbeatAt: Date.now(),
-    sessionToken: currentSessionToken
+    lastSeen: now,
+    heartbeatAt: now,
+    sessionToken: currentSessionToken,
+    roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || 0,
+    joinedAt: currentUser.joinedAt || currentUser.roomJoinedAt || currentUser.start || 0,
+    expiresAt: getSessionExpiryTimestamp(currentUser, now),
+    status: currentUser.inCourse ? "in-course" : "active"
   };
   await Promise.all([
     db.ref(`seatLeases/${currentUser.code}`).update(payload).catch(() => {}),
@@ -721,23 +850,95 @@ async function syncBrowserVisibilityState() {
 
 function isLeaseFresh(lease) {
   if (!lease || !lease.sessionToken) return false;
-  if (lease.exitPending || lease.disconnectRequestedAt || lease.exitLoggedAt) return false;
-  const marker = lease.heartbeatAt || lease.lastSeen || lease.start || 0;
-  return lease.sessionToken && (Date.now() - marker) <= ACTIVE_PRESENCE_GRACE_MS;
+  if (lease.exitPending || lease.disconnectRequestedAt || lease.exitLoggedAt || lease.leftAt) return false;
+  const status = String(lease.status || "").toLowerCase();
+  if (status === "offline" || status === "left" || status === "expired" || status === "terminated") return false;
+  const expiresAt = Number(lease.expiresAt);
+  if (Number.isFinite(expiresAt) && expiresAt > 0 && Date.now() >= expiresAt) return false;
+  const marker = getMostRecentPresenceTimestamp(lease);
+  return lease.sessionToken && marker > 0 && (Date.now() - marker) <= ACTIVE_PRESENCE_GRACE_MS;
 }
 
 function getPresenceMapFromSeatsSnapshot(seats = {}) {
   const map = {};
-  Object.keys(seats || {}).forEach(code => {
-    const seat = seats[code] || {};
-    map[code] = {
-      fresh: isPresenceFresh(seat),
-      inCourse: !!seat.inCourse,
-      name: seat.name || "",
-      code
+  Object.entries(seats || {}).forEach(([key, record]) => {
+    const entry = record || {};
+    const normalizedCode = normalizeSeatCode(entry.code || entry.seat || key || "--");
+    if (!normalizedCode) return;
+    const snapshot = {
+      ...entry,
+      code: normalizedCode,
+      seat: normalizedCode,
+      name: entry.name || "",
+      fresh: isPresenceFresh(entry),
+      inCourse: !!entry.inCourse,
+      joinedAt: getSessionRoomStartTimestamp(entry, 0),
+      roomJoinedAt: getSessionRoomStartTimestamp(entry, 0),
+      courseEnteredAt: getSessionCourseStartTimestamp(entry, 0),
+      lastSeen: Number(entry.lastSeen || entry.heartbeatAt || entry.updatedAt || 0) || 0,
+      heartbeatAt: Number(entry.heartbeatAt || 0) || 0,
+      leftAt: Number(entry.leftAt || 0) || 0,
+      exitLoggedAt: Number(entry.exitLoggedAt || 0) || 0,
+      disconnectRequestedAt: Number(entry.disconnectRequestedAt || 0) || 0,
+      expiresAt: Number(entry.expiresAt || 0) || 0,
+      status: entry.status || "",
+      sessionToken: entry.sessionToken || "",
+      updatedAt: Number(entry.updatedAt || 0) || 0
     };
+    const existing = map[normalizedCode];
+    if (!existing || getMostRecentPresenceTimestamp(snapshot) >= getMostRecentPresenceTimestamp(existing)) {
+      map[normalizedCode] = snapshot;
+    }
   });
   return map;
+}
+
+function mergePresenceMaps(...maps) {
+  const merged = {};
+  maps.filter(Boolean).forEach((map) => {
+    Object.entries(map).forEach(([code, entry]) => {
+      const normalizedCode = normalizeSeatCode(entry?.code || entry?.seat || code || "--");
+      if (!normalizedCode) return;
+      const candidate = {
+        ...entry,
+        code: normalizedCode,
+        seat: normalizedCode,
+        fresh: !!entry?.fresh,
+        lastSeen: Number(entry?.lastSeen || entry?.heartbeatAt || entry?.updatedAt || 0) || 0,
+        heartbeatAt: Number(entry?.heartbeatAt || 0) || 0,
+        joinedAt: Number(entry?.joinedAt || entry?.roomJoinedAt || entry?.start || 0) || 0,
+        roomJoinedAt: Number(entry?.roomJoinedAt || entry?.joinedAt || entry?.start || 0) || 0,
+        courseEnteredAt: Number(entry?.courseEnteredAt || 0) || 0,
+        leftAt: Number(entry?.leftAt || 0) || 0,
+        exitLoggedAt: Number(entry?.exitLoggedAt || 0) || 0,
+        disconnectRequestedAt: Number(entry?.disconnectRequestedAt || 0) || 0,
+        expiresAt: Number(entry?.expiresAt || 0) || 0,
+        status: entry?.status || ""
+      };
+      const existing = merged[normalizedCode];
+      if (!existing || getMostRecentPresenceTimestamp(candidate) >= getMostRecentPresenceTimestamp(existing)) {
+        merged[normalizedCode] = candidate;
+      }
+    });
+  });
+  return merged;
+}
+
+function resolvePresenceClosureTimestamp(presence = {}, fallback = Date.now()) {
+  const candidates = [
+    presence.leftAt,
+    presence.exitLoggedAt,
+    presence.disconnectRequestedAt,
+    presence.expiresAt,
+    presence.lastSeen,
+    presence.heartbeatAt,
+    presence.updatedAt
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return Number.isFinite(fallback) && fallback > 0 ? fallback : Date.now();
 }
 
 function isLeaveAction(action = "") {
@@ -765,8 +966,6 @@ function buildResolvedAttendanceEvents(events = [], presenceMap = {}, now = Date
     }
     recentBySignature.set(signature, eventTime);
 
-    // Keep the original event stream clean and stable.
-    // We only normalize names and collapse duplicate transitions here.
     resolved.push(event);
   });
 
@@ -778,87 +977,274 @@ function buildStaleSessionSummary(seatData = {}, leaseData = null) {
   const code = seatData.code || leaseData?.seat || leaseData?.code || "--";
   const name = seatData.name || leaseData?.name || getSeatDisplayName(code, "Unknown");
   const ownerId = seatData.id || leaseData?.ownerId || seatData.ownerId || seatData.userId || "";
-  const sessionStart = seatData.start || leaseData?.start || now;
+  const sessionStart = getSessionRoomStartTimestamp(seatData, leaseData?.start || now);
   const sessionDuration = Math.min(SESSION_LIMIT, Math.max(0, now - sessionStart));
-  const courseStart = seatData.courseEnteredAt || leaseData?.courseEnteredAt || 0;
+  const courseStart = getSessionCourseStartTimestamp(seatData, sessionStart);
   const activeCourseName = seatData.activeCourseName || leaseData?.activeCourseName || "Full Stack AI Engineer";
   return { now, code, name, ownerId, sessionStart, sessionDuration, courseStart, activeCourseName };
 }
 
-async function closeStalePresenceSession(seatData, leaseData = null) {
-  const sessionToken = seatData?.sessionToken || leaseData?.sessionToken;
-  if (!seatData || !seatData.code || !sessionToken) return false;
-  if ((isPresenceFresh(seatData) || seatData.exitLoggedAt || leaseData?.exitLoggedAt) && !isSessionOverLimit(seatData)) return false;
+function normalizeCourseSessionRecord(sessionId, record = {}, fallback = {}) {
+  const code = normalizeSeatCode(record.code || fallback.code || "--");
+  const courseName = record.courseName || fallback.courseName || record.activeCourseName || fallback.activeCourseName || "Full Stack AI Engineer";
+  return {
+    id: sessionId,
+    name: record.name || fallback.name || getSeatDisplayName(code, "Unknown"),
+    code,
+    sessionToken: record.sessionToken || fallback.sessionToken || "",
+    start: Number(record.start) || Number(fallback.start) || 0,
+    end: Number(record.end) || 0,
+    duration: Number(record.duration) || 0,
+    roomJoinedAt: Number(record.roomJoinedAt) || Number(fallback.roomJoinedAt) || 0,
+    courseName,
+    status: record.status || fallback.status || "active",
+    startLabel: record.startLabel || fallback.startLabel || "",
+    endLabel: record.endLabel || fallback.endLabel || ""
+  };
+}
 
-  const { now, code, name, ownerId, sessionStart, sessionDuration, courseStart, activeCourseName } = buildStaleSessionSummary(seatData, leaseData);
-  const exitClaim = await claimSessionExitOnce(code, sessionToken, "stale-session-sweep", now);
-  if (!exitClaim.claimed) return false;
-  const hasCourse = !!seatData.inCourse || !!leaseData?.inCourse;
+async function findOpenCourseSessionId(code = "", sessionToken = "") {
+  const normalizedCode = normalizeSeatCode(code);
+  const normalizedToken = String(sessionToken || "").trim();
 
-  if (hasCourse) {
-    try {
-      const courseSnap = await db.ref(COURSE_SESSION_COLLECTION).orderByChild("code").equalTo(code).get();
-      const sessions = courseSnap.val() || {};
-      const activeIds = Object.keys(sessions).filter(id => {
-        const s = sessions[id] || {};
-        return !s.end || s.status === "active";
-      });
-      const targetId = activeIds.sort((a, b) => (sessions[b].start || 0) - (sessions[a].start || 0))[0];
-      if (targetId) {
-        await db.ref(`${COURSE_SESSION_COLLECTION}/${targetId}`).update({
-          end: now,
-          duration: Math.max(0, now - (sessions[targetId].start || courseStart || sessionStart || now)),
-          status: "terminated",
-          endLabel: formatClockDateTime(now)
-        }).catch(() => {});
+  const collectOpenIds = (sessions = {}) => Object.entries(sessions)
+    .filter(([sessionId, record]) => {
+      if (!record) return false;
+      const recordCode = normalizeSeatCode(record.code || normalizedCode || "--");
+      const matchesCode = !normalizedCode || recordCode === normalizedCode;
+      const matchesToken = !normalizedToken || String(record.sessionToken || "") === normalizedToken;
+      const isOpen = !Number(record.end) || Number(record.end) <= 0;
+      return matchesCode && matchesToken && isOpen;
+    })
+    .sort((a, b) => (Number(b[1]?.start) || 0) - (Number(a[1]?.start) || 0))
+    .map(([sessionId]) => sessionId);
+
+  if (normalizedToken) {
+    const tokenSnap = await db.ref(COURSE_SESSION_COLLECTION).orderByChild("sessionToken").equalTo(normalizedToken).get().catch(() => null);
+    const tokenIds = tokenSnap ? collectOpenIds(tokenSnap.val() || {}) : [];
+    if (tokenIds.length) return tokenIds[0];
+  }
+
+  if (normalizedCode) {
+    const codeSnap = await db.ref(COURSE_SESSION_COLLECTION).orderByChild("code").equalTo(normalizedCode).get().catch(() => null);
+    const codeIds = codeSnap ? collectOpenIds(codeSnap.val() || {}) : [];
+    if (codeIds.length) return codeIds[0];
+  }
+
+  return null;
+}
+
+async function finalizeCourseSessionsForPresence({
+  code = "",
+  sessionToken = "",
+  reason = "leave",
+  endTime = Date.now(),
+  startOverride = null,
+  roomJoinedAt = 0,
+  courseName = "Full Stack AI Engineer",
+  name = "Unknown",
+  currentSessionId = null
+} = {}) {
+  const normalizedCode = normalizeSeatCode(code);
+  const normalizedToken = String(sessionToken || "").trim();
+  const normalizedReason = String(reason || "leave");
+  const normalizedEnd = Number.isFinite(endTime) && endTime > 0 ? endTime : Date.now();
+  const updatesById = new Map();
+
+  const addMatchesFromSnapshot = (snap, expectedToken = "") => {
+    const sessions = snap || {};
+    Object.entries(sessions).forEach(([sessionId, record]) => {
+      if (!record) return;
+      const recordCode = normalizeSeatCode(record.code || normalizedCode || "--");
+      const recordToken = String(record.sessionToken || "").trim();
+      const open = !Number(record.end) || Number(record.end) <= 0;
+      const codeMatches = !normalizedCode || recordCode === normalizedCode;
+      const tokenMatches = !expectedToken || recordToken === expectedToken;
+      if (open && codeMatches && tokenMatches) {
+        updatesById.set(sessionId, record);
       }
-    } catch (_) {}
+    });
+  };
+
+  if (normalizedToken) {
+    const tokenSnap = await db.ref(COURSE_SESSION_COLLECTION).orderByChild("sessionToken").equalTo(normalizedToken).get().catch(() => null);
+    if (tokenSnap) addMatchesFromSnapshot(tokenSnap.val() || {}, normalizedToken);
+  }
+
+  if (!updatesById.size && normalizedCode) {
+    const codeSnap = await db.ref(COURSE_SESSION_COLLECTION).orderByChild("code").equalTo(normalizedCode).get().catch(() => null);
+    if (codeSnap) addMatchesFromSnapshot(codeSnap.val() || {}, normalizedToken);
+  }
+
+  if (currentSessionId) {
+    const currentSnap = await db.ref(`${COURSE_SESSION_COLLECTION}/${currentSessionId}`).get().catch(() => null);
+    if (currentSnap && currentSnap.exists && currentSnap.exists()) {
+      updatesById.set(currentSessionId, currentSnap.val() || {});
+    }
+  }
+
+  if (!updatesById.size) return false;
+
+  const tasks = [];
+  for (const [sessionId, record] of updatesById.entries()) {
+    const recordStart = Number(record.start) || 0;
+    const resolvedStart = getSessionCourseStartTimestamp({
+      courseEnteredAt: startOverride || record.courseEnteredAt || recordStart || roomJoinedAt || normalizedEnd,
+      start: recordStart || startOverride || normalizedEnd,
+      roomJoinedAt: Number(record.roomJoinedAt) || roomJoinedAt || 0
+    }, normalizedEnd);
+    const duration = Math.max(0, normalizedEnd - resolvedStart);
+    tasks.push(
+      db.ref(`${COURSE_SESSION_COLLECTION}/${sessionId}`).update({
+        name: record.name || name || getSeatDisplayName(normalizedCode, "Unknown"),
+        code: normalizeSeatCode(record.code || normalizedCode || "--"),
+        courseName: record.courseName || courseName || "Full Stack AI Engineer",
+        sessionToken: record.sessionToken || normalizedToken || "",
+        roomJoinedAt: Number(record.roomJoinedAt) || roomJoinedAt || 0,
+        start: resolvedStart,
+        end: normalizedEnd,
+        duration,
+        status: normalizedReason,
+        endLabel: formatAbsoluteDateTime(normalizedEnd)
+      }).catch(() => {})
+    );
+  }
+
+  await Promise.all(tasks);
+  if (currentCourseSessionId && updatesById.has(currentCourseSessionId)) {
+    currentCourseSessionId = null;
+  }
+  return true;
+}
+
+async function closeStalePresenceSession(seatData, leaseData = null) {
+  const merged = {
+    ...(leaseData || {}),
+    ...(seatData || {})
+  };
+
+  const code = normalizeSeatCode(merged.code || merged.seat || seatData?.code || leaseData?.seat || leaseData?.code || "--");
+  const sessionToken = merged.sessionToken || leaseData?.sessionToken || seatData?.sessionToken || "";
+  if (!code || !sessionToken) return false;
+
+  const closureTime = resolvePresenceClosureTimestamp(merged, Date.now());
+  const roomJoinedAt = getSessionRoomStartTimestamp(merged, leaseData?.start || merged.start || closureTime);
+  const courseEnteredAt = getSessionCourseStartTimestamp(merged, roomJoinedAt);
+  const wasInCourse = !!merged.inCourse;
+  const wasHandRaised = !!merged.handRaised;
+  const name = merged.name || leaseData?.name || getSeatDisplayName(code, "Unknown");
+  const activeCourseName = merged.activeCourseName || leaseData?.activeCourseName || "Full Stack AI Engineer";
+  const seatUserId = merged.id || merged.ownerId || leaseData?.ownerId || merged.userId || "";
+  const exitReason = merged.disconnectReason || merged.exitReason || "stale-session-sweep";
+
+  const exitClaim = await claimSessionExitOnce(code, sessionToken, exitReason, closureTime);
+  if (!exitClaim.claimed && !merged.exitLoggedAt && !merged.leftAt && !isSessionOverLimit(merged)) {
+    return false;
+  }
+
+  const courseDuration = Math.max(0, Math.min(SESSION_LIMIT, closureTime - courseEnteredAt));
+  const roomDuration = Math.max(0, Math.min(SESSION_LIMIT, closureTime - roomJoinedAt));
+  const finalStatus = "offline";
+  const offlineStamp = {
+    handRaised: false,
+    handRaisedAt: 0,
+    inCourse: false,
+    activeCourseName: "",
+    courseEnteredAt: 0,
+    roomJoinedAt,
+    joinedAt: roomJoinedAt,
+    start: roomJoinedAt,
+    lastSeen: closureTime,
+    heartbeatAt: closureTime,
+    leftAt: closureTime,
+    exitPending: true,
+    exitLoggedAt: closureTime,
+    disconnectRequestedAt: closureTime,
+    exitReason,
+    status: finalStatus,
+    expiresAt: roomJoinedAt + SESSION_LIMIT
+  };
+
+  if (wasHandRaised) {
+    await pushAttendanceOnce({
+      name,
+      code,
+      action: "hand-lower",
+      time: closureTime,
+      reason: exitReason,
+      courseName: activeCourseName,
+      sessionToken
+    });
+  }
+
+  if (wasInCourse) {
+    await finalizeCourseSessionsForPresence({
+      code,
+      sessionToken,
+      reason: exitReason,
+      endTime: closureTime,
+      startOverride: courseEnteredAt,
+      roomJoinedAt,
+      courseName: activeCourseName,
+      name,
+      currentSessionId: currentCourseSessionId
+    });
+
+    await pushAttendanceOnce({
+      name,
+      code,
+      action: "course-leave",
+      time: closureTime,
+      joinedAt: roomJoinedAt,
+      leftAt: closureTime,
+      sessionDuration: courseDuration,
+      reason: exitReason,
+      courseName: activeCourseName,
+      sessionToken
+    });
   }
 
   await pushAttendanceOnce({
     name,
     code,
     action: "terminated",
-    time: now,
-    sessionDuration,
-    start: sessionStart,
-    reason: "stale-session-sweep",
+    time: closureTime,
+    joinedAt: roomJoinedAt,
+    leftAt: closureTime,
+    sessionDuration: roomDuration,
+    reason: exitReason,
+    courseName: activeCourseName,
     sessionToken
   });
 
-  if (hasCourse) {
-    await pushAttendanceOnce({
-      name,
-      code,
-      action: "course-leave",
-      time: now,
-      sessionDuration: Math.min(SESSION_LIMIT, Math.max(0, now - (courseStart || sessionStart))),
-      reason: "stale-session-sweep",
-      courseName: activeCourseName,
-      sessionToken
-    });
+  const updateTargets = [db.ref(`seatLeases/${code}`), db.ref(`seats/${code}`)];
+  if (seatUserId) updateTargets.push(db.ref(`onlineUsers/${seatUserId}`));
+
+  await Promise.all(updateTargets.map(ref => ref.update(offlineStamp).catch(() => {})));
+
+  if (wasHandRaised) {
+    await db.ref(`seatLeases/${code}`).update({
+      handRaised: false,
+      handRaisedAt: 0
+    }).catch(() => {});
+    await db.ref(`seats/${code}`).update({
+      handRaised: false,
+      handRaisedAt: 0
+    }).catch(() => {});
+    if (seatUserId) {
+      await db.ref(`onlineUsers/${seatUserId}`).update({
+        handRaised: false,
+        handRaisedAt: 0
+      }).catch(() => {});
+    }
   }
 
-  await Promise.all([
-    db.ref(`seats/${code}`).update({
-      exitLoggedAt: now,
-      exitReason: "stale-session-sweep"
-    }).catch(() => {}),
-    ownerId ? db.ref(`onlineUsers/${ownerId}`).update({
-      exitLoggedAt: now,
-      exitReason: "stale-session-sweep"
-    }).catch(() => {}) : Promise.resolve(),
-    db.ref(`seatLeases/${code}`).update({
-      exitLoggedAt: now,
-      exitReason: "stale-session-sweep"
-    }).catch(() => {})
-  ]);
+  await db.ref(`weeklyHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + roomDuration).catch(() => {});
+  await db.ref(`weeklyCourseHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + courseDuration).catch(() => {});
+  await db.ref(`dailyHours/${getTodayIdentifier()}/${code}`).transaction(v => (v || 0) + roomDuration).catch(() => {});
+  await db.ref(`monthlyHours/${getMonthIdentifier()}/${code}`).transaction(v => (v || 0) + roomDuration).catch(() => {});
+  await db.ref(`allTimeHours/${code}`).transaction(v => (v || 0) + roomDuration).catch(() => {});
 
-  const removals = [];
-  removals.push(db.ref(`seats/${code}`).remove().catch(() => {}));
-  if (ownerId) removals.push(db.ref(`onlineUsers/${ownerId}`).remove().catch(() => {}));
-  removals.push(db.ref(`seatLeases/${code}`).remove().catch(() => {}));
-  await Promise.all(removals);
   return true;
 }
 
@@ -866,10 +1252,11 @@ async function closeStalePresenceSession(seatData, leaseData = null) {
 
 // SESSION MANAGEMENT TIMERS
 // ==========================================================================
+
 function startTimer() {
   clearInterval(timerInterval);
   if (currentUser && timerBox) {
-    timerBox.innerText = formatLiveSeconds(getVisibleElapsedSessionMs(currentUser.start));
+    timerBox.innerText = formatLiveSeconds(getElapsedSessionMsFromUser(currentUser));
   }
   timerInterval = setInterval(() => {
     if (!currentUser) return;
@@ -879,61 +1266,51 @@ function startTimer() {
       return;
     }
 
-    if (currentUser.inCourse && isSessionOverLimit({ start: currentUser.courseEnteredAt })) {
-      leaveRoom(true, "session-expired");
-      return;
-    }
-
-    const currentSessionMs = getVisibleElapsedSessionMs(currentUser.start);
+    const currentSessionMs = getElapsedSessionMsFromUser(currentUser);
     timerBox.innerText = formatLiveSeconds(currentSessionMs);
   }, 1000);
 }
+
 
 
 async function refreshAllPresenceHeartbeats() {
   if (!currentUser || !currentSessionToken) return;
 
   if (isSessionOverLimit(currentUser)) {
-    leaveRoom(true, "session-expired");
-    return;
-  }
-
-  if (currentUser.inCourse && isSessionOverLimit({ start: currentUser.courseEnteredAt })) {
     await leaveRoom(true, "session-expired");
-    return;
-  }
-
-  const leaseRef = db.ref(`seatLeases/${currentUser.code}`);
-  const leaseSnap = await leaseRef.get().catch(() => null);
-  const lease = leaseSnap && leaseSnap.val ? leaseSnap.val() : null;
-  if (!lease || lease.sessionToken !== currentSessionToken) {
-    await leaveRoom(true, "lease-lost");
     return;
   }
 
   const payload = buildPresencePayload();
   if (!payload) return;
 
-  await leaseRef.update({
-    seat: currentUser.code,
-    name: currentUser.name,
-    ownerId: currentUser.id,
-    deviceId: currentDeviceId,
-    tabId: currentTabId,
-    sessionToken: currentSessionToken,
-    inCourse: !!currentUser.inCourse,
-    activeCourseName: currentUser.activeCourseName || "",
-    courseEnteredAt: currentUser.courseEnteredAt || 0,
-    start: currentUser.start || Date.now(),
-    lastSeen: Date.now(),
-    heartbeatAt: Date.now()
-  }).catch(() => {});
-
-  await db.ref(`seats/${currentUser.code}`).update(payload).catch(() => {});
-  await db.ref(`onlineUsers/${currentUser.id}`).update(payload).catch(() => {});
+  const now = Date.now();
+  await Promise.all([
+    db.ref(`seatLeases/${currentUser.code}`).update({
+      seat: currentUser.code,
+      name: currentUser.name,
+      ownerId: currentUser.id,
+      deviceId: currentDeviceId,
+      tabId: currentTabId,
+      sessionToken: currentSessionToken,
+      inCourse: !!currentUser.inCourse,
+      activeCourseName: currentUser.activeCourseName || "",
+      courseEnteredAt: currentUser.courseEnteredAt || 0,
+      start: getSessionRoomStartTimestamp(currentUser, now),
+      joinedAt: getSessionRoomStartTimestamp(currentUser, now),
+      roomJoinedAt: getSessionRoomStartTimestamp(currentUser, now),
+      expiresAt: getSessionExpiryTimestamp(currentUser, now),
+      status: currentUser.inCourse ? "in-course" : "active",
+      lastSeen: now,
+      heartbeatAt: now
+    }).catch(() => {}),
+    db.ref(`seats/${currentUser.code}`).update(payload).catch(() => {}),
+    db.ref(`onlineUsers/${currentUser.id}`).update(payload).catch(() => {})
+  ]);
 }
 
 function startSessionHeartbeat() {
+
   clearInterval(sessionHeartbeatInterval);
   refreshAllPresenceHeartbeats();
   sessionHeartbeatInterval = setInterval(refreshAllPresenceHeartbeats, HEARTBEAT_INTERVAL_MS);
@@ -958,6 +1335,21 @@ function bindVisibilityPresenceSync() {
   document.addEventListener("visibilitychange", scheduleSync);
   window.addEventListener("focus", scheduleSync);
   window.addEventListener("blur", scheduleSync);
+}
+
+
+function bindUnloadPresenceCleanup() {
+  if (document.__studyRoomUnloadSyncBound) return;
+  document.__studyRoomUnloadSyncBound = true;
+
+  const handleShutdown = () => {
+    if (!currentUser || isSessionTeardownInProgress) return;
+    syncBrowserVisibilityState().catch(() => {});
+    leaveRoom(true, "tab-close").catch(() => {});
+  };
+
+  window.addEventListener("pagehide", handleShutdown, { capture: true });
+  window.addEventListener("beforeunload", handleShutdown, { capture: true });
 }
 
 async function registerSessionDisconnectHandlers() {
@@ -1013,7 +1405,7 @@ function updateCourseActionButton() {
 }
 
 async function leaveCourse(auto = false, reason = "manual-course-leave", opts = {}) {
-  const { silent = false, skipConfirm = false, allowDuringTeardown = false, suppressAttendanceLog = false } = opts;
+  const { silent = false, skipConfirm = false, allowDuringTeardown = false, suppressAttendanceLog = false, leaveTime: leaveTimeOverride = null } = opts;
   if (!currentUser || !currentUser.inCourse || (isSessionTeardownInProgress && !allowDuringTeardown)) return false;
   if (auto && isSessionTeardownInProgress && !allowDuringTeardown) return false;
 
@@ -1032,20 +1424,34 @@ async function leaveCourse(auto = false, reason = "manual-course-leave", opts = 
   }
 
   const activeCourseName = currentUser.activeCourseName || "Full Stack AI Engineer";
-  const courseStartTime = currentUser.courseEnteredAt || Date.now();
+  const roomStartTime = getSessionRoomStartTimestamp(currentUser);
+  const courseStartTime = getSessionCourseStartTimestamp(currentUser, roomStartTime);
+  const leaveTime = Number.isFinite(leaveTimeOverride) && leaveTimeOverride > 0 ? leaveTimeOverride : Date.now();
+  const rawCourseDuration = Math.max(0, leaveTime - courseStartTime);
+  const roomDurationCap = Math.max(0, leaveTime - roomStartTime);
+  const courseDuration = Math.min(SESSION_LIMIT, Math.min(rawCourseDuration, roomDurationCap));
+
   currentUser.inCourse = false;
   currentUser.activeCourseName = "";
   currentUser.courseEnteredAt = 0;
-  currentUser.lastSeen = Date.now();
-  currentUser.heartbeatAt = Date.now();
+  currentUser.lastSeen = leaveTime;
+  currentUser.heartbeatAt = leaveTime;
+  currentUser.status = "active";
+
   const code = currentUser.code;
   const id = currentUser.id;
   const sessionToken = currentSessionToken;
-  const leaveTime = Date.now();
 
-  if (currentCourseSessionId) {
-    await finalizeActiveCourseSession(auto ? "terminated" : reason, courseStartTime);
-  }
+  await finalizeActiveCourseSession(auto ? "terminated" : reason, courseStartTime, leaveTime);
+
+  const courseExitPayload = {
+    inCourse: false,
+    activeCourseName: "",
+    courseEnteredAt: 0,
+    lastSeen: leaveTime,
+    heartbeatAt: leaveTime,
+    status: "active"
+  };
 
   await db.ref(`seatLeases/${code}`).transaction((current) => {
     if (!current || (current.sessionToken && current.sessionToken !== sessionToken)) {
@@ -1053,29 +1459,12 @@ async function leaveCourse(auto = false, reason = "manual-course-leave", opts = 
     }
     return {
       ...current,
-      inCourse: false,
-      activeCourseName: "",
-      courseEnteredAt: 0,
-      lastSeen: leaveTime,
-      heartbeatAt: leaveTime
+      ...courseExitPayload
     };
   }).catch(() => {});
 
-  await db.ref(`onlineUsers/${id}`).update({
-    inCourse: false,
-    activeCourseName: "",
-    courseEnteredAt: 0,
-    lastSeen: leaveTime,
-    heartbeatAt: leaveTime
-  }).catch(() => {});
-
-  await db.ref(`seats/${code}`).update({
-    inCourse: false,
-    activeCourseName: "",
-    courseEnteredAt: 0,
-    lastSeen: leaveTime,
-    heartbeatAt: leaveTime
-  }).catch(() => {});
+  await db.ref(`onlineUsers/${id}`).update(courseExitPayload).catch(() => {});
+  await db.ref(`seats/${code}`).update(courseExitPayload).catch(() => {});
 
   if (!suppressAttendanceLog) {
     await pushAttendanceOnce({
@@ -1083,11 +1472,15 @@ async function leaveCourse(auto = false, reason = "manual-course-leave", opts = 
       code,
       action: auto ? "terminated" : "course-leave",
       time: leaveTime,
-      sessionDuration: Math.max(0, leaveTime - (currentUser.start || leaveTime)),
+      joinedAt: roomStartTime,
+      leftAt: leaveTime,
+      sessionDuration: courseDuration,
       reason: auto ? "stale-session-sweep" : reason,
       courseName: activeCourseName,
       sessionToken
     });
+
+    await db.ref(`weeklyCourseHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + courseDuration);
   }
 
   if (!silent) {
@@ -1100,44 +1493,54 @@ async function leaveCourse(auto = false, reason = "manual-course-leave", opts = 
   return true;
 }
 
-async function finalizeActiveCourseSession(reason = "leave", startOverride = null) {
-  if (!currentUser || !currentCourseSessionId) return;
-  const endTime = Date.now();
-  const startTime = getSafeTimestamp(startOverride || currentUser.courseEnteredAt, endTime);
-  const duration = Math.max(0, endTime - startTime);
-  await db.ref(`${COURSE_SESSION_COLLECTION}/${currentCourseSessionId}`).update({
-    end: endTime,
-    duration,
-    status: reason,
-    endLabel: formatClockDateTime(endTime)
-  }).catch(() => {});
-  currentCourseSessionId = null;
+async function finalizeActiveCourseSession(reason = "leave", startOverride = null, endOverride = null) {
+  if (!currentUser) return false;
+  const endTime = Number.isFinite(endOverride) && endOverride > 0 ? endOverride : Date.now();
+  const startTime = getSessionCourseStartTimestamp({ courseEnteredAt: startOverride || currentUser.courseEnteredAt, start: startOverride || currentUser.courseEnteredAt }, endTime);
+  return finalizeCourseSessionsForPresence({
+    code: currentUser.code,
+    sessionToken: currentSessionToken,
+    reason,
+    endTime,
+    startOverride: startTime,
+    roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || startTime,
+    courseName: currentUser.activeCourseName || "Full Stack AI Engineer",
+    name: currentUser.name,
+    currentSessionId: currentCourseSessionId
+  });
 }
 
 function buildRoomSessionsFromAttendance(events, presenceMap = {}, now = Date.now()) {
   const openSessions = {};
   const sessions = [];
+
   events.forEach(event => {
     if (!event || !event.time) return;
+    const code = normalizeSeatCode(event.code || '--');
+
     if (event.action === 'join') {
-      openSessions[event.code] = { name: event.name || getSeatDisplayName(event.code, 'Unknown'), code: event.code, start: event.time, status: 'active' };
+      const start = getSessionRoomStartTimestamp(event, event.time);
+      openSessions[code] = { name: event.name || getSeatDisplayName(code, 'Unknown'), code, start, status: 'active' };
       return;
     }
+
     if (String(event.action || '').startsWith('leave') || String(event.action || '').includes('expired') || String(event.action || '').includes('terminated')) {
-      const open = openSessions[event.code];
+      const open = openSessions[code];
       if (open) {
         sessions.push({ ...open, end: event.time, duration: Math.min(SESSION_LIMIT, Math.max(0, event.time - open.start)), action: event.action, status: 'ended' });
-        delete openSessions[event.code];
+        delete openSessions[code];
       }
     }
   });
 
   Object.entries(openSessions).forEach(([code, open]) => {
-    const presence = presenceMap?.[code] || {};
+    const normalizedCode = normalizeSeatCode(code);
+    const presence = presenceMap?.[normalizedCode] || {};
     if (!presence.fresh) return;
-    const start = open.start || presence.start || now;
+    const start = open.start || presence.joinedAt || presence.roomJoinedAt || presence.start || now;
     sessions.push({
       ...open,
+      code: normalizedCode,
       start,
       end: 0,
       duration: Math.min(SESSION_LIMIT, Math.max(0, now - start)),
@@ -1149,37 +1552,130 @@ function buildRoomSessionsFromAttendance(events, presenceMap = {}, now = Date.no
   return sessions;
 }
 
-function buildCourseSessions(events, presenceMap = {}, now = Date.now()) {
+function buildSessionTotalsMap(sessionList = [], capMap = null) {
+  const map = new Map();
+  sessionList.forEach(session => {
+    if (!session) return;
+    const code = normalizeSeatCode(session.code || '--');
+    const duration = Math.max(0, Number(session.duration) || 0);
+    const prev = map.get(code) || {
+      name: session.name || getSeatDisplayName(code, 'Unknown'),
+      code,
+      totalMs: 0,
+      sessions: 0
+    };
+    prev.totalMs += duration;
+    prev.sessions += 1;
+    prev.name = prev.name || session.name || getSeatDisplayName(code, 'Unknown');
+    map.set(code, prev);
+  });
+
+  if (!capMap) return map;
+
+  for (const [code, row] of map.entries()) {
+    if (!capMap.has(code)) continue;
+    const cap = Number(capMap.get(code));
+    if (Number.isFinite(cap) && cap >= 0) {
+      row.totalMs = Math.min(row.totalMs, cap);
+    }
+    map.set(code, row);
+  }
+
+  return map;
+}
+
+function aggregateTopUsers(sessionList, capMap = null) {
+  const totalsMap = buildSessionTotalsMap(sessionList, capMap);
+  const sorted = [...totalsMap.values()].sort((a, b) => {
+    if (b.totalMs !== a.totalMs) return b.totalMs - a.totalMs;
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+
+  let rank = 0;
+  let lastMs = null;
+  return sorted.map((item) => {
+    if (lastMs === null || item.totalMs !== lastMs) {
+      rank += 1;
+      lastMs = item.totalMs;
+    }
+    return { ...item, rank };
+  });
+}
+
+function buildCourseSessions(events, presenceMap = {}, now = Date.now(), roomSessions = []) {
+  const roomSessionMap = buildSessionTotalsMap(roomSessions);
+  const roomStartMap = new Map();
+  const roomEndMap = new Map();
+
+  roomSessions.forEach((session) => {
+    const code = normalizeSeatCode(session.code || '--');
+    const existingStart = roomStartMap.get(code);
+    const sessionStart = Number(session.start) || 0;
+    const sessionEnd = Number(session.end) || 0;
+    if (!existingStart || sessionStart < existingStart) roomStartMap.set(code, sessionStart);
+    const currentEnd = roomEndMap.get(code) || 0;
+    const effectiveEnd = sessionEnd > 0 ? sessionEnd : now;
+    if (effectiveEnd > currentEnd) roomEndMap.set(code, effectiveEnd);
+  });
+
   return events
     .filter(Boolean)
     .map(item => {
-      const start = item.start || item.time || 0;
-      let end = item.end || 0;
+      const code = normalizeSeatCode(item.code || '--');
+      const presence = presenceMap?.[code] || {};
+      const recordToken = String(item.sessionToken || '').trim();
+      const presenceToken = String(presence.sessionToken || '').trim();
+      const tokenMatches = !recordToken || !presenceToken || recordToken === presenceToken;
+      const roomJoinedAt = item.roomJoinedAt || item.roomStart || item.joinedAt || roomStartMap.get(code) || 0;
+      const rawStart = item.start || item.time || 0;
+      const start = Math.max(rawStart, roomJoinedAt || rawStart || 0);
+      let end = Number(item.end) || 0;
       let status = item.status || 'active';
-      const code = item.code || '--';
-      const isFresh = !!presenceMap?.[code]?.fresh;
+      const isFresh = !!presence?.fresh;
+      const roomEnd = roomEndMap.get(code) || 0;
 
-      if ((!end || end <= 0 || status === 'active') && !isFresh) {
-        end = end || now;
-        status = 'terminated';
+      if (!end || end <= 0) {
+        if (isFresh && tokenMatches) {
+          status = 'active';
+        } else {
+          const presenceEnd = Number(
+            presence.exitLoggedAt ||
+            presence.leftAt ||
+            presence.disconnectRequestedAt ||
+            presence.lastSeen ||
+            presence.heartbeatAt ||
+            0
+          ) || 0;
+          if (presenceEnd > 0) {
+            end = presenceEnd;
+            status = presence.status || 'ended';
+          } else {
+            return null;
+          }
+        }
       }
 
-      const computedDuration = Math.max(0, (end || now) - start);
-      const duration = Math.min(SESSION_LIMIT, computedDuration);
+      const resolvedEnd = end > 0 ? Math.min(end, roomEnd || end) : 0;
+      const computedDuration = resolvedEnd > 0 ? Math.max(0, resolvedEnd - start) : Math.max(0, now - start);
+      const roomCap = Number(roomSessionMap.get(code)?.totalMs || 0);
+      const duration = Math.min(SESSION_LIMIT, roomCap > 0 ? Math.min(computedDuration, roomCap) : computedDuration);
 
       return {
         id: item.id,
-        name: item.name || getSeatDisplayName(code, 'Unknown'),
+        name: getCanonicalSeatName(code, item.name || 'Unknown'),
         code,
         start,
-        end,
+        end: resolvedEnd,
+        roomJoinedAt,
         duration,
         courseName: item.courseName || item.activeCourseName || 'Full Stack AI Engineer',
-        status: isFresh && (!end || end <= 0) ? 'active' : status,
+        sessionToken: recordToken,
+        status: !resolvedEnd ? 'active' : status,
         startLabel: item.startLabel || formatClockDateTime(start),
-        endLabel: item.endLabel || (end ? formatClockDateTime(end) : '—')
+        endLabel: item.endLabel || (resolvedEnd ? formatClockDateTime(resolvedEnd) : '—')
       };
     })
+    .filter(Boolean)
     .sort((a, b) => b.start - a.start);
 }
 
@@ -1188,7 +1684,7 @@ function formatAttendanceActionLabel(event) {
   const code = escapeHtml(event.code || '--');
   const nameHtml = `<strong class="clean-att-name">${name}</strong>`;
   const seatHtml = `<span class="clean-att-seat-pill">Seat ${code}</span>`;
-  const timeStr = formatClockDateTime(event.time || Date.now());
+  const timeStr = formatAbsoluteDateTime(event.time || Date.now());
   let body = '';
   let icon = 'bi-clock';
   let iconClass = 'icon-leave';
@@ -1262,11 +1758,15 @@ function renderAttendanceRows(targetEl, events, limit) {
 async function refreshAttendanceViews(options = {}) {
   const { silentReportRefresh = false } = options;
   try {
-    const [attendanceSnap, seatsSnap] = await Promise.all([
+    const [attendanceSnap, seatsSnap, onlineSnap] = await Promise.all([
       db.ref('attendance').get(),
-      db.ref('seats').get()
+      db.ref('seats').get(),
+      db.ref('onlineUsers').get()
     ]);
-    const presenceMap = getPresenceMapFromSeatsSnapshot(seatsSnap.val() || {});
+    const presenceMap = mergePresenceMaps(
+      getPresenceMapFromSeatsSnapshot(seatsSnap.val() || {}),
+      getPresenceMapFromSeatsSnapshot(onlineSnap.val() || {})
+    );
     const rawEvents = Object.values(attendanceSnap.val() || {});
     activeAttendanceEventsCache = buildResolvedAttendanceEvents(rawEvents, presenceMap);
     renderAttendanceRows(attendanceList, activeAttendanceEventsCache, liveAttendanceLogLimit);
@@ -1278,31 +1778,309 @@ async function refreshAttendanceViews(options = {}) {
   } catch (_) {}
 }
 
-function aggregateTopUsers(sessionList) {
-  const map = new Map();
-  sessionList.forEach(session => {
-    const key = session.code;
-    const prev = map.get(key) || { name: session.name, code: session.code, totalMs: 0, sessions: 0 };
-    prev.totalMs += session.duration || 0;
-    prev.sessions += 1;
-    map.set(key, prev);
-  });
+function getDisplayWeekRangeLabel(weekKey) {
+  const match = String(weekKey || '').match(/^week_(\d+)_(\d+)_(\d+)$/);
+  if (!match) return String(weekKey || 'Unknown week');
+  const year = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10) - 1;
+  const day = parseInt(match[3], 10);
+  const start = new Date(year, month, day);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
 
-  const sorted = [...map.values()].sort((a, b) => {
-    if (b.totalMs !== a.totalMs) return b.totalMs - a.totalMs;
-    return String(a.name || "").localeCompare(String(b.name || ""));
-  });
+  const shortMonth = (date) => date.toLocaleDateString('en-US', { month: 'short' });
+  const shortDay = (date) => date.getDate();
+  const shortDow = (date) => date.toLocaleDateString('en-US', { weekday: 'short' });
 
-  let rank = 0;
-  let lastMs = null;
-  return sorted.map((item) => {
-    if (lastMs === null || item.totalMs !== lastMs) {
-      rank += 1;
-      lastMs = item.totalMs;
-    }
-    return { ...item, rank };
-  });
+  return `${shortDay(start)}/${shortMonth(start)} (${shortDow(start)}) - ${shortDay(end)}/${shortMonth(end)} (${shortDow(end)})`;
 }
+
+function getRankBadgeMarkup(rank) {
+  const safeRank = Math.max(1, parseInt(rank || 1, 10));
+  if (safeRank === 1) return '<span class="rank-badge rank-gold" aria-label="Rank 1">🥇</span>';
+  if (safeRank === 2) return '<span class="rank-badge rank-silver" aria-label="Rank 2">🥈</span>';
+  if (safeRank === 3) return '<span class="rank-badge rank-bronze" aria-label="Rank 3">🥉</span>';
+  return `<span class="rank-badge rank-number" aria-label="Rank ${safeRank}">${safeRank}</span>`;
+}
+
+function getRankCelebrationTone(rank) {
+  const safeRank = Math.max(1, parseInt(rank || 1, 10));
+  if (safeRank === 1) return { className: 'rank-celebrate-gold', label: 'Premium Leader', icon: 'bi-stars' };
+  if (safeRank === 2) return { className: 'rank-celebrate-silver', label: 'Elite Runner-Up', icon: 'bi-award' };
+  if (safeRank === 3) return { className: 'rank-celebrate-bronze', label: 'Strong Performer', icon: 'bi-trophy' };
+  if (safeRank === 4) return { className: 'rank-celebrate-warning', label: 'Room to Rise', icon: 'bi-lightning-charge' };
+  return { className: 'rank-celebrate-danger', label: 'Lowest Rank', icon: 'bi-exclamation-triangle' };
+}
+
+function getRankCelebrationMessage(rank, name, code) {
+  const safeRank = Math.max(1, parseInt(rank || 1, 10));
+  const seat = code ? `Seat ${code}` : 'your seat';
+  if (safeRank === 1) {
+    return {
+      title: `🥇 Legendary, ${escapeHtml(name || 'Champion')}!`,
+      desc: `You are the weekly leader from ${seat}. This is the premium position — the strongest signal of focus, consistency, and results. Keep the crown and set the pace for everyone else.`,
+      chips: ['#1 Leader', 'Premium Modal', 'Top Energy']
+    };
+  }
+  if (safeRank === 2) {
+    return {
+      title: `🥈 Excellent, ${escapeHtml(name || 'Runner-up')}!`,
+      desc: `You are only one step away from the top spot from ${seat}. That is elite-level progress and a very strong result for this week.`,
+      chips: ['#2 Rank', 'Almost Top', 'Strong Push']
+    };
+  }
+  if (safeRank === 3) {
+    return {
+      title: `🥉 Strong, ${escapeHtml(name || 'Performer')}!`,
+      desc: `Third place from ${seat} keeps you in the premium zone. You are still competing at the front, and one more push can move you higher next week.`,
+      chips: ['#3 Rank', 'Solid Result', 'Keep Growing']
+    };
+  }
+  if (safeRank === 4) {
+    return {
+      title: `Rank #4 for ${escapeHtml(name || 'User')}`,
+      desc: `You are close to the top three from ${seat}. That is still strong, but the final climb is waiting — keep pushing next week.`,
+      chips: ['#4 Rank', 'Close Call', 'Rise Higher']
+    };
+  }
+  return {
+    title: `Rank #5 for ${escapeHtml(name || 'User')}`,
+    desc: `Right now you are in 5th place from ${seat}, the lowest position in the top five. That is a warning sign — regroup and come back much stronger next week.`,
+    chips: ['#5 Rank', 'Lowest Top-5', 'Climb Up']
+  };
+}
+
+function syncBestUsersSnapshotActionVisibility() {
+  if (bestUsersHistoryBtn) {
+    bestUsersHistoryBtn.classList.toggle('hidden', !currentUser);
+  }
+}
+
+async function computeCurrentWeekRoomRankData() {
+  const [attendanceSnap, seatsSnap, onlineSnap] = await Promise.all([
+    db.ref('attendance').get(),
+    db.ref('seats').get(),
+    db.ref('onlineUsers').get()
+  ]);
+
+  const presenceMerged = mergePresenceMaps(
+    getPresenceMapFromSeatsSnapshot(seatsSnap.val() || {}),
+    getPresenceMapFromSeatsSnapshot(onlineSnap.val() || {})
+  );
+  const rawAttendanceEvents = Object.values(attendanceSnap.val() || {}).sort((a, b) => (a.time || 0) - (b.time || 0));
+  const attendanceEvents = buildResolvedAttendanceEvents(rawAttendanceEvents, presenceMerged, Date.now());
+  const roomSessions = buildRoomSessionsFromAttendance(attendanceEvents, presenceMerged, Date.now()).filter(item => isTimestampInSelectedRange(item.start, 'week'));
+  const roomRank = aggregateTopUsers(roomSessions);
+  return { roomRank, roomSessions, attendanceEvents };
+}
+
+async function showCurrentUserRankCelebration() {
+  try {
+    if (!currentUser || !currentSessionToken) return;
+    const modalKey = `rank_modal_seen_${currentSessionToken}`;
+    if (sessionStorage.getItem(modalKey) === '1') return;
+
+    const { roomRank } = await computeCurrentWeekRoomRankData();
+    const currentRankItem = roomRank.find(item => item.code === currentUser.code);
+    if (!currentRankItem) return;
+
+    const tone = getRankCelebrationTone(currentRankItem.rank);
+    const message = getRankCelebrationMessage(currentRankItem.rank, currentUser.name, currentUser.code);
+
+    if (rankCelebrationTitle) {
+      rankCelebrationTitle.innerHTML = `<i class="bi ${tone.icon}"></i> ${message.title}`;
+    }
+    if (rankCelebrationBody) {
+      rankCelebrationBody.innerHTML = `
+        <div class="rank-celebrate-card ${tone.className}">
+          <div class="rank-celebrate-pill ${tone.className}">
+            <i class="bi ${tone.icon}"></i> ${tone.label}
+          </div>
+          <div class="rank-celebrate-title">${message.title}</div>
+          <div class="rank-celebrate-desc">${message.desc}</div>
+          <div class="rank-celebrate-footer">
+            ${message.chips.map(chip => `<span class="rank-celebrate-chip">${chip}</span>`).join('')}
+            <span class="rank-celebrate-chip">Seat ${escapeHtml(currentUser.code)}</span>
+            <span class="rank-celebrate-chip">Rank #${currentRankItem.rank}</span>
+          </div>
+        </div>
+      `;
+    }
+    rankCelebrationModalOverlay?.classList.remove('hidden');
+    sessionStorage.setItem(modalKey, '1');
+  } catch (_) {}
+}
+
+function closeRankCelebrationModal() {
+  rankCelebrationModalOverlay?.classList.add('hidden');
+}
+
+async function openBestUsersHistoryModal() {
+  try {
+    if (!currentUser) {
+      toast('Please join the room first to view your weekly history.', 'warning');
+      return;
+    }
+    if (!bestUsersHistoryList) return;
+    bestUsersHistoryList.innerHTML = '<div class="history-week-empty">Loading weekly history...</div>';
+    bestUsersHistoryModalOverlay?.classList.remove('hidden');
+
+    const [weeklyRoomSnap, weeklyCourseSnap] = await Promise.all([
+      db.ref('weeklyHours').get(),
+      db.ref('weeklyCourseHours').get()
+    ]);
+
+    const weeklyRoomData = weeklyRoomSnap.val() || {};
+    const weeklyCourseData = weeklyCourseSnap.val() || {};
+    const weekKeys = Array.from(new Set([
+      ...Object.keys(weeklyRoomData),
+      ...Object.keys(weeklyCourseData)
+    ]))
+      .filter((weekKey) => /^week_\d+_\d+_\d+$/.test(weekKey))
+      .sort((a, b) => {
+        const ma = a.match(/^week_(\d+)_(\d+)_(\d+)$/);
+        const mb = b.match(/^week_(\d+)_(\d+)_(\d+)$/);
+        const da = ma ? new Date(parseInt(ma[1], 10), parseInt(ma[2], 10) - 1, parseInt(ma[3], 10)) : new Date(0);
+        const dbd = mb ? new Date(parseInt(mb[1], 10), parseInt(mb[2], 10) - 1, parseInt(mb[3], 10)) : new Date(0);
+        return dbd - da;
+      });
+
+    if (!weekKeys.length) {
+      bestUsersHistoryList.innerHTML = '<div class="history-week-empty">No weekly history yet.</div>';
+      return;
+    }
+
+    const currentCode = normalizeSeatCode(currentUser.code);
+    const assignRanks = (rows) => {
+      let rank = 0;
+      let lastMs = null;
+      return rows.map((row) => {
+        if (lastMs === null || row.totalMs !== lastMs) {
+          rank += 1;
+          lastMs = row.totalMs;
+        }
+        return { ...row, rank };
+      });
+    };
+    const renderHistoryRows = (rows, type) => {
+      if (!rows.length) {
+        return `<div class="history-week-empty compact">No ${type} history yet.</div>`;
+      }
+      return rows.slice(0, 5).map((row, index) => {
+        const rankLabel = row.rank || (index + 1);
+        return `
+          <div class="history-mini-row ${rankLabel === 1 ? 'rank-1' : ''}">
+            ${getRankBadgeMarkup(rankLabel)}
+            <div class="history-mini-body">
+              <div class="history-mini-name">${escapeHtml(getCanonicalSeatName(row.code, row.name || 'Unknown'))}</div>
+              <div class="history-mini-seat">Seat ${escapeHtml(row.code || '--')} · ${type === 'course' ? 'Course' : 'Room'}</div>
+            </div>
+            <div class="history-mini-time">${escapeHtml(formatSessionDuration(row.totalMs || 0))}</div>
+          </div>
+        `;
+      }).join('');
+    };
+
+    const rendered = weekKeys.map((weekKey) => {
+      const roomWeek = weeklyRoomData[weekKey] || {};
+      const courseWeek = weeklyCourseData[weekKey] || {};
+
+      const roomRows = assignRanks(Object.entries(roomWeek)
+        .filter(([, ms]) => Number(ms) > 0)
+        .map(([code, ms]) => ({
+          code: normalizeSeatCode(code),
+          name: getCanonicalSeatName(code, 'Unknown'),
+          totalMs: Number(ms) || 0
+        }))
+        .sort((a, b) => b.totalMs - a.totalMs || String(a.name).localeCompare(String(b.name))));
+
+      const courseRows = assignRanks(Object.entries(courseWeek)
+        .filter(([, ms]) => Number(ms) > 0)
+        .map(([code, ms]) => {
+          const roomTotal = Number(roomWeek[normalizeSeatCode(code)] || 0);
+          const safeTotal = Number(ms) || 0;
+          return {
+            code: normalizeSeatCode(code),
+            name: getCanonicalSeatName(code, 'Unknown'),
+            totalMs: roomTotal > 0 ? Math.min(safeTotal, roomTotal) : safeTotal
+          };
+        })
+        .sort((a, b) => b.totalMs - a.totalMs || String(a.name).localeCompare(String(b.name))));
+
+      if (!roomRows.length && !courseRows.length) return '';
+
+      const roomMyRow = roomRows.find((row) => row.code === currentCode);
+      const courseMyRow = courseRows.find((row) => row.code === currentCode);
+      const label = getDisplayWeekRangeLabel(weekKey);
+
+      const roomNote = roomMyRow
+        ? (roomMyRow.rank === 1
+          ? '<div class="history-week-note success">You led the room joined ranking this week.</div>'
+          : `<div class="history-week-note">Your room rank: #${roomMyRow.rank} • ${formatSessionDuration(roomMyRow.totalMs)}</div>`)
+        : '<div class="history-week-note">Your room join result was not recorded for this week.</div>';
+
+      const courseNote = courseMyRow
+        ? (courseMyRow.rank === 1
+          ? '<div class="history-week-note success">You led the course entered ranking this week.</div>'
+          : `<div class="history-week-note">Your course rank: #${courseMyRow.rank} • ${formatSessionDuration(courseMyRow.totalMs)}</div>`)
+        : '<div class="history-week-note">Your course entry result was not recorded for this week.</div>';
+
+      return `
+        <div class="history-week-card">
+          <div class="history-week-head">
+            <div>
+              <div class="history-week-title">${escapeHtml(weekKey.replace(/_/g, ' '))}</div>
+              <div class="history-week-range">${label}</div>
+            </div>
+            <div class="rank-celebrate-chip">Weekly snapshot</div>
+          </div>
+
+          <div class="history-week-columns">
+            <div class="history-week-column">
+              <div class="history-week-box-title"><i class="bi bi-box-arrow-in-right"></i> Room Joined</div>
+              <div class="history-week-column-list">
+                ${renderHistoryRows(roomRows, 'room')}
+              </div>
+              ${roomNote}
+            </div>
+
+            <div class="history-week-column">
+              <div class="history-week-box-title"><i class="bi bi-mortarboard-fill"></i> Course Entered</div>
+              <div class="history-week-column-list">
+                ${renderHistoryRows(courseRows, 'course')}
+              </div>
+              ${courseNote}
+            </div>
+          </div>
+        </div>
+      `;
+    }).filter(Boolean);
+
+    bestUsersHistoryList.innerHTML = rendered.join('') || '<div class="history-week-empty">No weekly history yet.</div>';
+  } catch (_) {
+    bestUsersHistoryList.innerHTML = '<div class="history-week-empty">Unable to load weekly history right now.</div>';
+  }
+}
+
+function closeBestUsersHistoryModal() {
+  bestUsersHistoryModalOverlay?.classList.add('hidden');
+}
+
+
+bestUsersHistoryBtn?.addEventListener("click", () => {
+  openBestUsersHistoryModal();
+});
+closeBestUsersHistoryModalBtn?.addEventListener("click", closeBestUsersHistoryModal);
+bestUsersHistoryCloseBtn?.addEventListener("click", closeBestUsersHistoryModal);
+bestUsersHistoryModalOverlay?.addEventListener("click", (event) => {
+  if (event.target === bestUsersHistoryModalOverlay) closeBestUsersHistoryModal();
+});
+
+closeRankCelebrationModalBtn?.addEventListener("click", closeRankCelebrationModal);
+rankCelebrationCloseBtn?.addEventListener("click", closeRankCelebrationModal);
+rankCelebrationModalOverlay?.addEventListener("click", (event) => {
+  if (event.target === rankCelebrationModalOverlay) closeRankCelebrationModal();
+});
 
 async function renderWeeklyBestUsersSnapshot() {
   const panel = bestUsersSnapshotPanel || document.getElementById("bestUsersSnapshotPanel");
@@ -1311,6 +2089,7 @@ async function renderWeeklyBestUsersSnapshot() {
   const joinedCount = document.getElementById("bestUsersJoinedCount");
   const courseCount = document.getElementById("bestUsersCourseCount");
   if (!panel || !roomList || !courseList) return;
+  syncBestUsersSnapshotActionVisibility();
   const now = Date.now();
   if (window.__weeklyBestUsersSnapshotLoading) return;
   if (window.__weeklyBestUsersSnapshotLastAt && (now - window.__weeklyBestUsersSnapshotLastAt) < 25000) return;
@@ -1325,16 +2104,18 @@ async function renderWeeklyBestUsersSnapshot() {
       db.ref("onlineUsers").get()
     ]);
 
-    const presenceMap = getPresenceMapFromSeatsSnapshot(seatsSnap.val() || {});
-    const onlinePresence = getPresenceMapFromSeatsSnapshot(onlineSnap.val() || {});
-    const presenceMerged = { ...presenceMap, ...onlinePresence };
+    const presenceMerged = mergePresenceMaps(
+      getPresenceMapFromSeatsSnapshot(seatsSnap.val() || {}),
+      getPresenceMapFromSeatsSnapshot(onlineSnap.val() || {})
+    );
     const rawAttendanceEvents = Object.values(attendanceSnap.val() || {}).sort((a, b) => (a.time || 0) - (b.time || 0));
     const attendanceEvents = buildResolvedAttendanceEvents(rawAttendanceEvents, presenceMerged, now);
     const roomSessions = buildRoomSessionsFromAttendance(attendanceEvents, presenceMerged, now).filter(item => isTimestampInSelectedRange(item.start, "week"));
-    const courseSessions = buildCourseSessions(Object.values(courseSnap.val() || {}), presenceMerged, now).filter(item => isTimestampInSelectedRange(item.start, "week"));
+    const roomTotalsMap = buildSessionTotalsMap(roomSessions);
+    const courseSessions = buildCourseSessions(Object.values(courseSnap.val() || {}), presenceMerged, now, roomSessions).filter(item => isTimestampInSelectedRange(item.start, "week"));
 
     const roomRank = aggregateTopUsers(roomSessions);
-    const courseRank = aggregateTopUsers(courseSessions);
+    const courseRank = aggregateTopUsers(courseSessions, roomTotalsMap);
 
     const roomUnique = new Set(roomSessions.map(s => s.code)).size;
     const courseUnique = new Set(courseSessions.map(s => s.code)).size;
@@ -1351,11 +2132,24 @@ async function renderWeeklyBestUsersSnapshot() {
       target.innerHTML = items.slice(0, 5).map((item, index) => {
         const rankLabel = item.rank || (index + 1);
         const timeLabel = formatSessionDuration(item.totalMs || 0);
+        const rankClass = rankLabel === 1 ? "rank-1" : "";
+        const fallingDots = rankLabel === 1 ? `
+          <span class="rank-falling-dots" aria-hidden="true">
+            ${Array.from({ length: 100 }, (_, dotIndex) => {
+              const column = dotIndex % 20;
+              const row = Math.floor(dotIndex / 20);
+              const left = column * 5;
+              const top = row * 8;
+              const delay = (dotIndex % 25) * 0.08;
+              return `<span style="left:${left}%; top:${top}px; animation-delay:${delay}s"></span>`;
+            }).join('')}
+          </span>
+        ` : '';
         return `
-          <div class="mini-rank-row">
-            <div class="mini-rank-index">#${rankLabel}</div>
+          <div class="mini-rank-row ${rankClass}">
+            ${getRankBadgeMarkup(rankLabel)}
             <div class="mini-rank-body">
-              <div class="mini-rank-name">${escapeHtml(item.name || "Unknown")}</div>
+              <div class="mini-rank-name">${fallingDots}<span class="mini-rank-name-text">${escapeHtml(getCanonicalSeatName(item.code, item.name || "Unknown"))}</span></div>
               <div class="mini-rank-seat">Seat ${escapeHtml(item.code || "--")} · ${type === "course" ? "Course" : "Room"}</div>
             </div>
             <div class="mini-rank-time">${escapeHtml(timeLabel)}</div>
@@ -1385,17 +2179,21 @@ async function renderAttendanceReportModal(options = {}) {
     attendanceReportSummaryGrid.innerHTML = '';
   }
 
-  const [attendanceSnap, courseSnap, seatsSnap] = await Promise.all([
+  const [attendanceSnap, courseSnap, seatsSnap, onlineSnap] = await Promise.all([
     db.ref('attendance').get(),
     db.ref(COURSE_SESSION_COLLECTION).get(),
-    db.ref('seats').get()
+    db.ref('seats').get(),
+    db.ref('onlineUsers').get()
   ]);
 
-  const presenceMap = getPresenceMapFromSeatsSnapshot(seatsSnap.val() || {});
+  const presenceMap = mergePresenceMaps(
+    getPresenceMapFromSeatsSnapshot(seatsSnap.val() || {}),
+    getPresenceMapFromSeatsSnapshot(onlineSnap.val() || {})
+  );
   const rawAttendanceEvents = Object.values(attendanceSnap.val() || {}).sort((a, b) => (a.time || 0) - (b.time || 0));
   const attendanceEvents = buildResolvedAttendanceEvents(rawAttendanceEvents, presenceMap);
   const roomSessions = buildRoomSessionsFromAttendance(attendanceEvents, presenceMap, Date.now());
-  const courseSessions = buildCourseSessions(Object.values(courseSnap.val() || {}), presenceMap);
+  const courseSessions = buildCourseSessions(Object.values(courseSnap.val() || {}), presenceMap, Date.now(), roomSessions);
 
   const range = activeAttendanceReportRange;
   const userFilter = activeAttendanceReportUser;
@@ -1439,7 +2237,7 @@ async function renderAttendanceReportModal(options = {}) {
       rows.push(`
         <div class="report-session-row">
           <div>
-            <div class="report-session-title">${escapeHtml(session.name)} <span class="report-session-seat">Seat ${escapeHtml(session.code)}</span></div>
+            <div class="report-session-title">${escapeHtml(getCanonicalSeatName(session.code, session.name || "Unknown"))} <span class="report-session-seat">Seat ${escapeHtml(session.code)}</span></div>
             <div class="report-session-sub">Course: ${escapeHtml(session.courseName)} • ${session.startLabel} → ${session.end ? session.endLabel : 'Active'} • Total time: ${formatSessionDuration(session.duration || (Date.now() - session.start))}</div>
           </div>
           <span class="report-session-pill course">Course</span>
@@ -1450,7 +2248,7 @@ async function renderAttendanceReportModal(options = {}) {
       rows.push(`
         <div class="report-session-row">
           <div>
-            <div class="report-session-title">${escapeHtml(session.name)} <span class="report-session-seat">Seat ${escapeHtml(session.code)}</span></div>
+            <div class="report-session-title">${escapeHtml(getCanonicalSeatName(session.code, session.name || "Unknown"))} <span class="report-session-seat">Seat ${escapeHtml(session.code)}</span></div>
             <div class="report-session-sub">Room: ${formatClockDateTime(session.start)} → ${formatClockDateTime(session.end)} • Total time: ${formatSessionDuration(session.duration)}</div>
           </div>
           <span class="report-session-pill room">Room</span>
@@ -1511,7 +2309,7 @@ function openAttendanceReportModal(mode = 'admin') {
         <option value="02">Eng Osman</option>
         <option value="03">Eng Zaki</option>
         <option value="04">Eng Abdi</option>
-        <option value="05">Eng Hassan</option>
+        <option value="05">Eng Shafie</option>
       `;
       attendanceReportUserSelect.value = 'all';
       attendanceReportUserSelect.disabled = false;
@@ -1714,23 +2512,31 @@ function downloadAttendanceReportPdf() {
 function scheduleImmediateStaleSessionSweep() {
   clearTimeout(immediateStaleSweepTimeout);
   immediateStaleSweepTimeout = setTimeout(() => {
+    immediateStaleSweepTimeout = null;
     sweepStaleSessions().catch(() => {});
-  }, 250);
+  }, 0);
 }
 
 async function sweepStaleSessions() {
   try {
-    const [seatsSnap, leasesSnap] = await Promise.all([
+    const [seatsSnap, leasesSnap, onlineSnap] = await Promise.all([
       db.ref("seats").get(),
-      db.ref("seatLeases").get()
+      db.ref("seatLeases").get(),
+      db.ref("onlineUsers").get()
     ]);
     const seats = seatsSnap.val() || {};
     const leases = leasesSnap.val() || {};
-    const allCodes = new Set([...Object.keys(seats), ...Object.keys(leases)]);
+    const onlineUsers = onlineSnap.val() || {};
+    const allCodes = new Set([
+      ...Object.keys(seats),
+      ...Object.keys(leases),
+      ...Object.values(onlineUsers).map(user => normalizeSeatCode(user?.code || user?.seat || "--"))
+    ]);
     for (const code of allCodes) {
       const seatData = seats[code] || {};
       const leaseData = leases[code] || null;
-      const merged = { ...leaseData, ...seatData, code };
+      const onlineMatch = Object.values(onlineUsers).find(user => normalizeSeatCode(user?.code || user?.seat || "--") === code) || null;
+      const merged = { ...onlineMatch, ...leaseData, ...seatData, code };
       const sessionToken = merged.sessionToken || leaseData?.sessionToken || seatData.sessionToken;
       if (!sessionToken) continue;
       if ((isPresenceFresh(merged) || merged.exitLoggedAt) && !isSessionOverLimit(merged)) continue;
@@ -1753,8 +2559,9 @@ function startAttendanceAutoRefresh() {
 function startStaleSessionMonitor() {
   if (staleSessionMonitorInterval) clearInterval(staleSessionMonitorInterval);
   staleSessionMonitorInterval = setInterval(() => {
+    if (!currentUser && !isAdminAuthenticated) return;
     sweepStaleSessions().catch(() => {});
-  }, STALE_SESSION_SWEEP_INTERVAL_MS);
+  }, 30000);
 }
 
 // ==========================================================================
@@ -1784,17 +2591,20 @@ function getSafeTimestamp(value, fallback = Date.now()) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+
 function isSessionOverLimit(sessionData, now = Date.now()) {
   if (!sessionData) return false;
-  const startCandidates = [
-    sessionData.courseEnteredAt,
-    sessionData.start,
-    sessionData.heartbeatAt,
-    sessionData.lastSeen
-  ];
-  const safeStart = startCandidates.map(v => Number(v)).find(v => Number.isFinite(v) && v > 0);
-  if (!safeStart) return false;
-  return (now - safeStart) >= SESSION_LIMIT;
+  const status = String(sessionData.status || "").toLowerCase();
+  if (sessionData.leftAt || sessionData.exitLoggedAt || sessionData.disconnectRequestedAt || sessionData.exitPending) return true;
+  if (status === "offline" || status === "left" || status === "expired" || status === "terminated") return true;
+
+  const expiresAt = Number(sessionData.expiresAt);
+  if (Number.isFinite(expiresAt) && expiresAt > 0) {
+    return now >= expiresAt;
+  }
+
+  const sessionStart = getSessionRoomStartTimestamp(sessionData, now);
+  return (now - sessionStart) >= SESSION_LIMIT;
 }
 
 function getElapsedSessionMs(startTimestamp, now = Date.now()) {
@@ -1808,21 +2618,7 @@ function getVisibleElapsedSessionMs(startTimestamp, now = Date.now()) {
 
 function scheduleSessionAutoExpiry() {
   clearTimeout(autoRemovalTimeoutInstance);
-  if (!currentUser) return;
-
-  const elapsed = getElapsedSessionMs(currentUser.start);
-  const remaining = SESSION_LIMIT - elapsed;
-
-  if (remaining <= 0) {
-    autoRemovalTimeoutInstance = setTimeout(() => {
-      leaveRoom(true, "session-expired");
-    }, 0);
-    return;
-  }
-
-  autoRemovalTimeoutInstance = setTimeout(() => {
-    leaveRoom(true, "session-expired");
-  }, remaining);
+  autoRemovalTimeoutInstance = null;
 }
 
 
@@ -1836,7 +2632,7 @@ async function syncPersonalAccumulatedTime(seatCode) {
   db.ref(path).on("value", async (snap) => {
     let historicalMs = snap.val() || 0;
     if (currentUser && currentUser.code === seatCode) {
-      historicalMs += getElapsedSessionMs(currentUser.start);
+      historicalMs += getElapsedSessionMsFromUser(currentUser);
     }
     weeklyMinutesVal.innerText = formatHoursMinutes(historicalMs);
     personalWeeklyBox.classList.remove("hidden");
@@ -1948,7 +2744,7 @@ function renderRotatorTextFrame(username) {
 // ==========================================================================
 
 async function joinRoom(name, code, pin) {
-  const normalizedCode = code.trim();
+  const normalizedCode = normalizeSeatCode(code);
   const targetSeat = SEATS[normalizedCode];
 
   if (!targetSeat) {
@@ -1995,16 +2791,23 @@ async function joinRoom(name, code, pin) {
   resetAttendanceEventWriteCache();
   sessionStorage.setItem("active_session_token", currentSessionToken);
   localStorage.setItem("active_session_token", currentSessionToken);
+  const now = Date.now();
+  const joinedAt = now;
   currentUser = {
     id: userId,
-    name: targetSeat.name,
+    name: getCanonicalSeatName(normalizedCode, targetSeat.name),
     code: normalizedCode,
-    start: Date.now(),
+    joinedAt,
+    start: joinedAt,
+    roomJoinedAt: joinedAt,
+    expiresAt: joinedAt + SESSION_LIMIT,
+    status: "active",
     inCourse: false,
     courseEnteredAt: 0,
     activeCourseName: "",
-    lastSeen: Date.now(),
-    heartbeatAt: Date.now(),
+    lastSeen: now,
+    heartbeatAt: now,
+    leftAt: 0,
     deviceId: currentDeviceId,
     tabId: currentTabId,
     sessionToken: currentSessionToken,
@@ -2038,35 +2841,45 @@ async function joinRoom(name, code, pin) {
     activeCourseName: "",
     courseEnteredAt: 0,
     start: currentUser.start,
-    lastSeen: Date.now(),
-    heartbeatAt: Date.now()
+    joinedAt: currentUser.joinedAt,
+    roomJoinedAt: currentUser.roomJoinedAt,
+    expiresAt: currentUser.expiresAt,
+    status: currentUser.status,
+    leftAt: 0,
+    lastSeen: now,
+    heartbeatAt: now
   });
 
   await registerSessionDisconnectHandlers().catch(() => {});
 
   await pushAttendanceOnce({
-    name: targetSeat.name,
+    name: getCanonicalSeatName(normalizedCode, targetSeat.name),
     code: normalizedCode,
     action: "join",
-    time: Date.now(),
+    time: now,
+    joinedAt: currentUser.joinedAt,
+    roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || 0,
+    expiresAt: currentUser.expiresAt,
     sessionToken: currentSessionToken
   });
 
-  toast(`Identity verified! Welcome ${targetSeat.name}`, "success");
+  toast(`Identity verified! Welcome ${getCanonicalSeatName(normalizedCode, targetSeat.name)}`, "success");
   formBox.classList.add("hidden");
   pinActionBox.classList.remove("hidden");
-  setStatusText(true, normalizedCode, targetSeat.name);
-  showJoinWelcomePopup(targetSeat.name, normalizedCode);
+  setStatusText(true, normalizedCode, getCanonicalSeatName(normalizedCode, targetSeat.name));
+  showJoinWelcomePopup(getCanonicalSeatName(normalizedCode, targetSeat.name), normalizedCode);
 
   startTimer();
-  scheduleSessionAutoExpiry();
   startSessionHeartbeat();
   syncPersonalAccumulatedTime(normalizedCode);
   localStorage.setItem("active_user", userId);
   updateCourseActionButton();
   focusDefaultCourseAction();
+  syncBestUsersSnapshotActionVisibility();
   renderLessonsUI();
+  setTimeout(() => showCurrentUserRankCelebration().catch(() => {}), 1200);
 }
+
 
 
 async function leaveRoom(auto = false, reason = "leave") {
@@ -2077,23 +2890,26 @@ async function leaveRoom(auto = false, reason = "leave") {
     const code = currentUser.code;
     const id = currentUser.id;
     const name = currentUser.name;
-    const sessionDuration = getElapsedSessionMs(currentUser.start);
+    const roomJoinedAt = getSessionRoomStartTimestamp(currentUser);
+    const courseEnteredAt = getSessionCourseStartTimestamp(currentUser, roomJoinedAt);
+    const leaveTime = Date.now();
+    const sessionDuration = Math.min(SESSION_LIMIT, Math.max(0, leaveTime - roomJoinedAt));
+    const courseDuration = Math.min(sessionDuration, Math.max(0, leaveTime - courseEnteredAt));
     const liveToken = currentSessionToken;
     const wasInCourse = !!currentUser.inCourse;
     const wasHandRaised = !!currentUser.handRaised;
     const activeCourseName = currentUser.activeCourseName || "Full Stack AI Engineer";
-    const exitClaim = await claimSessionExitOnce(code, liveToken, auto ? "stale-session-sweep" : reason);
-    if (!exitClaim.claimed) return;
+    const exitClaim = await claimSessionExitOnce(code, liveToken, auto ? "stale-session-sweep" : reason, leaveTime);
 
     if (wasHandRaised) {
       currentUser.handRaised = false;
       currentUser.handRaisedAt = 0;
-      const loweredPayload = buildPresencePayload({ handRaised: false, handRaisedAt: 0 });
+      const loweredPayload = buildPresencePayload({ handRaised: false, handRaisedAt: 0, status: currentUser.inCourse ? "in-course" : "active" });
       await Promise.all([
         db.ref(`onlineUsers/${id}`).update(loweredPayload).catch(() => {}),
         db.ref(`seats/${code}`).update(loweredPayload).catch(() => {})
       ]);
-      logHandAttendance("hand-lower", code, name, { reason: auto ? "room-leave-auto" : "room-leave" });
+      logHandAttendance("hand-lower", code, name, { reason: auto ? "room-leave-auto" : "room-leave", time: leaveTime });
     }
 
     if (wasInCourse) {
@@ -2101,15 +2917,18 @@ async function leaveRoom(auto = false, reason = "leave") {
         silent: true,
         skipConfirm: true,
         allowDuringTeardown: true,
-        suppressAttendanceLog: true
+        suppressAttendanceLog: true,
+        leaveTime
       });
 
       await pushAttendanceOnce({
         name,
         code,
         action: auto ? "terminated" : "course-leave",
-        time: Date.now(),
-        sessionDuration: Math.min(SESSION_LIMIT, Math.max(0, sessionDuration)),
+        time: leaveTime,
+        joinedAt: roomJoinedAt,
+        leftAt: leaveTime,
+        sessionDuration: courseDuration,
         reason: auto ? "room-leave-auto" : "room-leave",
         courseName: activeCourseName,
         sessionToken: liveToken
@@ -2117,13 +2936,19 @@ async function leaveRoom(auto = false, reason = "leave") {
     }
 
     const exitStamp = {
-      exitLoggedAt: Date.now(),
+      exitLoggedAt: leaveTime,
       exitReason: auto ? "stale-session-sweep" : reason,
-      lastSeen: Date.now(),
-      heartbeatAt: Date.now(),
+      lastSeen: leaveTime,
+      heartbeatAt: leaveTime,
       inCourse: false,
       activeCourseName: "",
-      courseEnteredAt: 0
+      roomJoinedAt,
+      joinedAt: roomJoinedAt,
+      start: roomJoinedAt,
+      courseEnteredAt: 0,
+      leftAt: leaveTime,
+      status: "offline",
+      expiresAt: roomJoinedAt + SESSION_LIMIT
     };
 
     await Promise.all([
@@ -2148,6 +2973,7 @@ async function leaveRoom(auto = false, reason = "leave") {
     db.ref("seatLeases/" + code).off();
 
     await db.ref(`weeklyHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
+    await db.ref(`weeklyCourseHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + courseDuration);
     await db.ref(`dailyHours/${getTodayIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
     await db.ref(`monthlyHours/${getMonthIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
     await db.ref(`allTimeHours/${code}`).transaction(v => (v || 0) + sessionDuration);
@@ -2169,9 +2995,11 @@ async function leaveRoom(auto = false, reason = "leave") {
       name: name,
       code: code,
       action: auto ? "terminated" : "leave",
-      time: Date.now(),
+      time: leaveTime,
+      joinedAt: roomJoinedAt,
+      leftAt: leaveTime,
       sessionDuration,
-      start: Date.now() - sessionDuration,
+      start: roomJoinedAt,
       reason: auto ? "stale-session-sweep" : reason,
       sessionToken: liveToken
     });
@@ -2179,6 +3007,9 @@ async function leaveRoom(auto = false, reason = "leave") {
     toast(auto ? "Session closed after the browser stopped sending heartbeats." : "Workspace link destroyed successfully.", "info");
     clearActiveSessionStorage();
     updateCourseActionButton();
+    syncBestUsersSnapshotActionVisibility();
+    closeRankCelebrationModal();
+    closeBestUsersHistoryModal();
     renderLessonsUI();
   } finally {
     isSessionTeardownInProgress = false;
@@ -2186,7 +3017,8 @@ async function leaveRoom(auto = false, reason = "leave") {
 }
 
 
-function listenToActiveKicks(userId) {
+function listenToActiveKicks
+(userId) {
 
   db.ref("onlineUsers/" + userId).on("value", (snap) => {
     if (isSessionTeardownInProgress) return;
@@ -2258,7 +3090,7 @@ async function openCourseEmbedWindow() {
   currentUser.courseEnteredAt = Date.now();
   currentUser.lastSeen = Date.now();
   currentUser.heartbeatAt = Date.now();
-  currentCourseSessionId = db.ref(COURSE_SESSION_COLLECTION).push().key;
+  currentCourseSessionId = await findOpenCourseSessionId(currentUser.code, currentSessionToken) || db.ref(COURSE_SESSION_COLLECTION).push().key;
   syncBrowserTitle();
   await db.ref(`seatLeases/${currentUser.code}`).transaction((current) => {
     if (current && current.sessionToken && current.sessionToken !== currentSessionToken) {
@@ -2280,20 +3112,36 @@ async function openCourseEmbedWindow() {
     };
   });
 
-  await db.ref(`${COURSE_SESSION_COLLECTION}/${currentCourseSessionId}`).set({
-    name: currentUser.name,
-    code: currentUser.code,
-    courseName: currentUser.activeCourseName,
-    start: currentUser.courseEnteredAt,
-    startLabel: formatClockDateTime(currentUser.courseEnteredAt),
-    end: 0,
-    duration: 0,
-    status: "active"
-  });
+  const activeCourseSessionRef = db.ref(`${COURSE_SESSION_COLLECTION}/${currentCourseSessionId}`);
+  const activeCourseSessionSnap = await activeCourseSessionRef.get().catch(() => null);
+  if (activeCourseSessionSnap && activeCourseSessionSnap.exists && activeCourseSessionSnap.exists()) {
+    await activeCourseSessionRef.update({
+      name: currentUser.name,
+      code: currentUser.code,
+      courseName: currentUser.activeCourseName,
+      sessionToken: currentSessionToken,
+      roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || currentUser.courseEnteredAt,
+      startLabel: formatAbsoluteDateTime(Number(activeCourseSessionSnap.val()?.start) || currentUser.courseEnteredAt)
+    }).catch(() => {});
+  } else {
+    await activeCourseSessionRef.set({
+      name: currentUser.name,
+      code: currentUser.code,
+      courseName: currentUser.activeCourseName,
+      sessionToken: currentSessionToken,
+      start: currentUser.courseEnteredAt,
+      roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || currentUser.courseEnteredAt,
+      startLabel: formatAbsoluteDateTime(currentUser.courseEnteredAt),
+      end: 0,
+      duration: 0,
+      status: "active"
+    });
+  }
 
   await db.ref("onlineUsers/" + currentUser.id).update({
     inCourse: true,
     activeCourseName: currentUser.activeCourseName,
+    roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || 0,
     courseEnteredAt: currentUser.courseEnteredAt,
     lastSeen: currentUser.lastSeen,
     heartbeatAt: currentUser.heartbeatAt
@@ -2302,6 +3150,7 @@ async function openCourseEmbedWindow() {
   await db.ref("seats/" + currentUser.code).update({
     inCourse: true,
     activeCourseName: currentUser.activeCourseName,
+    roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || 0,
     courseEnteredAt: currentUser.courseEnteredAt,
     lastSeen: currentUser.lastSeen,
     heartbeatAt: currentUser.heartbeatAt
@@ -2312,6 +3161,8 @@ async function openCourseEmbedWindow() {
     code: currentUser.code,
     action: "course-enter",
     time: Date.now(),
+    roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || 0,
+    joinedAt: currentUser.joinedAt || currentUser.start || 0,
     courseName: currentUser.activeCourseName,
     sessionToken: currentSessionToken
   });
@@ -2453,7 +3304,7 @@ function logHandAttendance(action, code, name, extras = {}) {
     name,
     code,
     action,
-    time: Date.now(),
+    time: Number.isFinite(extras.time) ? extras.time : Date.now(),
     reason,
     courseName: extras.courseName || "",
     sessionToken: extras.sessionToken || currentSessionToken
@@ -2872,7 +3723,6 @@ function initRealtimeDatabaseListeners() {
     }).join("|");
     if (seatsSignature !== lastSeatsPresenceSignature) {
       lastSeatsPresenceSignature = seatsSignature;
-      scheduleImmediateStaleSessionSweep();
     }
     const freshSeats = Object.values(activeSeats).filter(u => isPresenceFresh(u));
     let count = freshSeats.length;
@@ -2890,12 +3740,12 @@ function initRealtimeDatabaseListeners() {
         isOccupied = true;
         userCourseName = u.activeCourseName || "Full Stack AI Engineer";
         occupantSeatLabel = u.code;
-        entryTimestamp = u.courseEnteredAt || Date.now();
+        entryTimestamp = getSessionCourseStartTimestamp(u, Date.now());
       }
     });
 
     if (isOccupied) {
-      let formattedTime = new Date(entryTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      let formattedTime = formatAbsoluteDateTime(entryTimestamp);
       courseActiveOccupantSublabel.innerHTML = `<span class="course-alert-occupied-tag"><i class="bi bi-exclamation-triangle-fill"></i> Resource Engaged: ${userCourseName} (Seat ${occupantSeatLabel}) at ${formattedTime}</span>`;
     } else {
       courseActiveOccupantSublabel.innerHTML = `<span class="course-alert-available-tag"><i class="bi bi-check-circle-fill"></i> Workspace Available Now</span>`;
@@ -2911,11 +3761,32 @@ function initRealtimeDatabaseListeners() {
     }).join("|");
     if (usersSignature !== lastOnlinePresenceSignature) {
       lastOnlinePresenceSignature = usersSignature;
-      scheduleImmediateStaleSessionSweep();
     }
-    const freshUsers = Object.values(users)
+    const freshUsersMap = new Map();
+    Object.values(users)
       .filter(u => isPresenceFresh(u))
-      .sort((a, b) => {
+      .forEach((u) => {
+        const key = u.id || `${u.code || "seat"}_${u.sessionToken || createStableId("local")}`;
+        freshUsersMap.set(key, { ...u });
+      });
+
+    if (currentUser && currentSessionToken) {
+      const currentPresent = [...freshUsersMap.values()].some(u => u.id === currentUser.id || u.sessionToken === currentSessionToken || u.code === currentUser.code);
+      if (!currentPresent) {
+        freshUsersMap.set(currentUser.id || `local_${currentUser.code}`, {
+          ...currentUser,
+          lastSeen: Date.now(),
+          heartbeatAt: Date.now(),
+          sessionToken: currentSessionToken,
+          visibilityState: getCurrentVisibilityState(),
+          inCourse: !!currentUser.inCourse,
+          activeCourseName: currentUser.activeCourseName || "",
+          courseEnteredAt: currentUser.courseEnteredAt || 0
+        });
+      }
+    }
+
+    const freshUsers = [...freshUsersMap.values()].sort((a, b) => {
         const bCourse = b.inCourse ? 1 : 0;
         const aCourse = a.inCourse ? 1 : 0;
         if (bCourse !== aCourse) return bCourse - aCourse;
@@ -2942,12 +3813,12 @@ function initRealtimeDatabaseListeners() {
       const card = document.createElement("div");
       card.className = "user-card";
 
-      const roomJoinedLabel = u.start ? formatClockDateTime(u.start) : "—";
-      const courseJoinedLabel = u.inCourse && u.courseEnteredAt ? formatClockDateTime(u.courseEnteredAt) : "";
+      const roomJoinedLabel = formatAbsoluteDateTime(getSessionRoomStartTimestamp(u));
+      const courseJoinedLabel = u.inCourse && u.courseEnteredAt ? formatAbsoluteDateTime(getSessionCourseStartTimestamp(u)) : "";
 
       let badgeHtml = "";
       if (u.inCourse) {
-        const pathTime = u.courseEnteredAt ? new Date(u.courseEnteredAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : "";
+        const pathTime = u.courseEnteredAt ? formatAbsoluteDateTime(getSessionCourseStartTimestamp(u)) : "";
         badgeHtml = `<span class="in-course-indicator-tag in-course-danger-tag"><i class="bi bi-mortarboard-fill"></i> ${u.activeCourseName || 'In Course'} (${pathTime})</span>`;
       }
 
@@ -2966,7 +3837,7 @@ function initRealtimeDatabaseListeners() {
             <span class="student-session-meta-line"><i class="bi bi-box-arrow-in-right"></i> Room joined: ${escapeHtml(roomJoinedLabel)}</span>
             ${u.inCourse ? `<span class="student-session-meta-line course"><i class="bi bi-mortarboard-fill"></i> Course entered: ${escapeHtml(courseJoinedLabel)}</span>` : ''}
           </div>
-          <div class="live-elapsed-badge" data-start="${u.start}">00:00</div>
+          <div class="live-elapsed-badge" data-start="${getSessionRoomStartTimestamp(u)}">0s</div>
         </div>
         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
           ${handBtnHtml}
@@ -2994,13 +3865,7 @@ function updateLiveCardElapsedTimers() {
     const startTimeStamp = parseInt(badge.getAttribute("data-start"));
     if (!startTimeStamp) return;
     const difference = getVisibleElapsedSessionMs(startTimeStamp);
-    
-    const totalSecs = Math.floor(difference / 1000);
-    const hours = Math.floor(totalSecs / 3600);
-    const minutes = Math.floor((totalSecs % 3600) / 60);
-    const secs = totalSecs % 60;
-
-    badge.innerText = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m ${secs}s`;
+    badge.innerText = formatElapsedDuration(difference);
   });
 }
 
@@ -3179,17 +4044,16 @@ window.kickSeatUser = function(code) {
       const displayName = seatData.name || leaseData.name || getSeatDisplayName(code, "Unknown");
 
       if (seatData.inCourse || leaseData.inCourse) {
-        const courseSessionsSnap = await db.ref(COURSE_SESSION_COLLECTION).orderByChild('code').equalTo(code).get();
-        const courseSessions = courseSessionsSnap.val() || {};
-        const latestCourseId = Object.keys(courseSessions).sort((a, b) => (courseSessions[b].start || 0) - (courseSessions[a].start || 0))[0];
-        if (latestCourseId) {
-          await db.ref(`${COURSE_SESSION_COLLECTION}/${latestCourseId}`).update({
-            end: endTime,
-            duration: Math.max(0, endTime - (courseSessions[latestCourseId].start || endTime)),
-            status: 'admin-terminated',
-            endLabel: formatClockDateTime(endTime)
-          }).catch(() => {});
-        }
+        await finalizeCourseSessionsForPresence({
+          code,
+          sessionToken: seatToken,
+          reason: 'admin-terminated',
+          endTime,
+          startOverride: seatData.courseEnteredAt || leaseData.courseEnteredAt || seatData.start || leaseData.start || endTime,
+          roomJoinedAt: seatData.roomJoinedAt || leaseData.roomJoinedAt || seatData.start || leaseData.start || 0,
+          courseName: seatData.activeCourseName || leaseData.activeCourseName || 'Full Stack AI Engineer',
+          name: displayName
+        });
       }
 
       const onlineRemovals = [];
@@ -3216,6 +4080,7 @@ window.kickSeatUser = function(code) {
         action: "terminated",
         time: endTime,
         sessionDuration: duration,
+        roomJoinedAt: seatData.roomJoinedAt || leaseData.roomJoinedAt || seatData.start || leaseData.start || 0,
         reason: "admin-kick",
         sessionToken: seatToken
       });
@@ -3529,13 +4394,19 @@ async function bootstrapApplicationWorkspaceRuntime() {
     const storedSessionToken = sessionStorage.getItem("active_session_token") || "";
     if (onlineSnap.exists() && storedSessionToken && onlineSnap.val().sessionToken === storedSessionToken) {
       currentUser = { ...onlineSnap.val(), handRaised: !!onlineSnap.val().handRaised, handRaisedAt: onlineSnap.val().handRaisedAt || 0 };
-      currentUser.start = getSafeTimestamp(currentUser.start, Date.now());
-      currentUser.courseEnteredAt = getSafeTimestamp(currentUser.courseEnteredAt, 0);
-      
+            currentUser.name = getCanonicalSeatName(currentUser.code, currentUser.name);
+      const restoredJoinedAt = getSessionRoomStartTimestamp(currentUser, Date.now());
+      currentUser.joinedAt = restoredJoinedAt;
+      currentUser.roomJoinedAt = restoredJoinedAt;
+      currentUser.start = restoredJoinedAt;
+      currentUser.courseEnteredAt = getSessionCourseStartTimestamp(currentUser, restoredJoinedAt);
+      currentUser.expiresAt = getSessionExpiryTimestamp(currentUser, restoredJoinedAt);
+      currentUser.status = currentUser.status && currentUser.status !== "offline" ? currentUser.status : (currentUser.inCourse ? "in-course" : "active");
+
       formBox.classList.add("hidden");
       leaveBtn.classList.remove("hidden");
       pinActionBox.classList.remove("hidden");
-      setStatusText(true, currentUser.code, currentUser.name);
+      setStatusText(true, currentUser.code, getCanonicalSeatName(currentUser.code, currentUser.name));
       syncBrowserTitle();
       updateCourseActionButton();
       focusDefaultCourseAction();
@@ -3544,9 +4415,9 @@ async function bootstrapApplicationWorkspaceRuntime() {
       syncPersonalAccumulatedTime(currentUser.code);
       listenToActiveKicks(cacheUserId);
       listenToSeatLease(currentUser.code);
-      
-      const sessionQuotaSpent = Date.now() - currentUser.start;
-      const remainingTime = SESSION_LIMIT - sessionQuotaSpent;
+
+      const remainingTime = Math.max(0, currentUser.expiresAt - Date.now());
+
       
       if (remainingTime <= 0) {
         leaveRoom(true);
@@ -3571,8 +4442,10 @@ async function bootstrapApplicationWorkspaceRuntime() {
 
   initRealtimeDatabaseListeners();
   bindVisibilityPresenceSync();
-  startAttendanceAutoRefresh();
+  bindUnloadPresenceCleanup();
+  scheduleImmediateStaleSessionSweep();
   startStaleSessionMonitor();
+  startAttendanceAutoRefresh();
   refreshAttendanceViews();
   listenToGlobalBroadcastAlerts();
   renderLessonsUI();
@@ -3596,4 +4469,3 @@ document.getElementById("themeToggleBtn").addEventListener("click", () => {
 });
 
 window.addEventListener("DOMContentLoaded", bootstrapApplicationWorkspaceRuntime);
-test
