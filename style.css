@@ -686,6 +686,7 @@ body {
     gap: 20px;
     width:100%;
     max-width:100%;
+    width: 100%;
   }
 
   
@@ -2447,42 +2448,6 @@ body {
   max-height: none;
 }
 
-.clean-attendance-row{
-  width:100%;
-  max-width:100%;
-  overflow:hidden;
-}
-
-.clean-att-left{
-  min-width:0;
-  flex:1;
-}
-
-.clean-att-name{
-  overflow:hidden;
-  text-overflow:ellipsis;
-  white-space:nowrap;
-}
-
-.clean-att-time{
-  flex-shrink:0;
-}
-
-
-.user-card{
-  width:100%;
-  overflow:hidden;
-}
-
-.left-info-block{
-  min-width:0;
-}
-
-.left-info-block .name{
-  overflow:hidden;
-  white-space:nowrap;
-  text-overflow:ellipsis;
-}
 .report-summary-card {
   position: relative;
   overflow: hidden;
