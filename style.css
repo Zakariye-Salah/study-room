@@ -100,7 +100,7 @@
      ========================================================================== */
   .main-header {
     position: fixed;
-    top: 1px;
+    top: 16px;
     left: 50%;
     transform: translateX(-50%);
     width: calc(100% - 40px);
@@ -1952,7 +1952,7 @@
     .main-header {
       width: calc(100% - 24px);
       padding: 10px 14px;
-      top: 3px;
+      top: 10px;
       border-radius: 12px;
     }
   
