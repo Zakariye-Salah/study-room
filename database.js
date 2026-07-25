@@ -1944,7 +1944,7 @@ function formatAttendanceActionLabel(event) {
   } else if (event.action === 'course-leave') {
     icon = 'bi-laptop';
     iconClass = 'icon-leave';
-    body = `${nameHtml} left the course ${seatHtml} <span class="clean-att-duration-pill">${courseIcon} ${courseName}</span><span class="clean-att-duration-pill">Joined: ${escapeHtml(joinedLabel)}</span><span class="clean-att-duration-pill">Left: ${escapeHtml(leftLabel)}</span><span class="clean-att-duration-pill">${escapeHtml(durationText)}</span>`;
+    body = `${nameHtml} left the course ${seatHtml} <span class="clean-att-duration-pill">Joined: ${escapeHtml(joinedLabel)}</span><span class="clean-att-duration-pill">Left: ${escapeHtml(leftLabel)}</span><span class="clean-att-duration-pill">${escapeHtml(durationText)}</span>`;
     if (reasonLabel) {
       body += ` <span class="clean-att-duration-pill">${reasonLabel}</span>`;
     }
@@ -1963,7 +1963,7 @@ function formatAttendanceActionLabel(event) {
     icon = 'bi-box-arrow-left';
     iconClass = 'icon-leave';
     const actionText = event.action === 'terminated' ? 'was removed from the room' : 'left the room';
-    body = `${courseIcon} ${nameHtml} ${actionText} ${seatHtml} <span class="clean-att-duration-pill">${courseName}</span><span class="clean-att-duration-pill">Joined: ${escapeHtml(joinedLabel)}</span><span class="clean-att-duration-pill">Left: ${escapeHtml(leftLabel)}</span><span class="clean-att-duration-pill">${escapeHtml(durationText)}</span>`;
+    body = `${nameHtml} ${actionText} ${seatHtml} <span class="clean-att-duration-pill">Joined: ${escapeHtml(joinedLabel)}</span><span class="clean-att-duration-pill">Left: ${escapeHtml(leftLabel)}</span><span class="clean-att-duration-pill">${escapeHtml(durationText)}</span>`;
     if (reasonLabel) {
       body += ` <span class="clean-att-duration-pill">${reasonLabel}</span>`;
     }
