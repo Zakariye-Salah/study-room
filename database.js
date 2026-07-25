@@ -700,6 +700,50 @@ function isPresenceFresh(user) {
   return !isSessionOverLimit(user);
 }
 
+
+function getCurrentSessionPresenceSnapshot(now = Date.now()) {
+  if (!currentUser || !currentSessionToken || !currentUser.code || !currentUser.id) return null;
+  return {
+    ...currentUser,
+    code: currentUser.code,
+    id: currentUser.id,
+    sessionToken: currentSessionToken,
+    lastSeen: currentUser.lastSeen || now,
+    heartbeatAt: currentUser.heartbeatAt || currentUser.lastSeen || now,
+    start: currentUser.start || currentUser.roomJoinedAt || now,
+    roomJoinedAt: currentUser.roomJoinedAt || currentUser.joinedAt || currentUser.start || now,
+    joinedAt: currentUser.joinedAt || currentUser.roomJoinedAt || currentUser.start || now,
+    exitPending: false,
+    exitLoggedAt: 0,
+    disconnectRequestedAt: 0
+  };
+}
+
+function isCurrentSessionFreshPresence(now = Date.now()) {
+  const snapshot = getCurrentSessionPresenceSnapshot(now);
+  return !!snapshot && isPresenceFresh(snapshot) && !isSessionOverLimit(snapshot, now);
+}
+
+function shouldSuppressForcedSessionCleanup(reason = "") {
+  const normalized = String(reason || "").trim().toLowerCase();
+  const guardedReasons = new Set([
+    "removed",
+    "lease-lost",
+    "stale-session-sweep",
+    "force-kicked",
+    "force-offline-zero-online",
+    "zero-online-guardian"
+  ]);
+
+  if (!guardedReasons.has(normalized)) return false;
+  if (!currentUser || isSessionTeardownInProgress) return false;
+
+  const joinedAt = Number(currentUser.roomJoinedAt || currentUser.joinedAt || currentUser.start || 0) || 0;
+  if (joinedAt && (Date.now() - joinedAt) < 15000) return true;
+
+  return isCurrentSessionFreshPresence();
+}
+
 function createStableId(prefix) {
   try {
     if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -2597,6 +2641,8 @@ async function sweepStaleSessions(options = {}) {
 
 async function forceOfflineZeroOnlineUsers() {
   try {
+    if (currentUser) return false;
+    if (isCurrentSessionFreshPresence()) return false;
     const snap = await db.ref("onlineUsers").get();
     const users = snap.val() || {};
     const freshUsers = Object.values(users).filter(u => isPresenceFresh(u));
@@ -2616,7 +2662,9 @@ function startStaleSessionMonitor() {
       if (joinedAt && (Date.now() - joinedAt) < 5000) return;
     }
     sweepStaleSessions().catch(() => {});
-    forceOfflineZeroOnlineUsers().catch(() => {});
+    if (!currentUser && !isCurrentSessionFreshPresence()) {
+      forceOfflineZeroOnlineUsers().catch(() => {});
+    }
   };
   runMonitorTick();
   staleSessionMonitorInterval = setInterval(runMonitorTick, 60000);
@@ -2954,6 +3002,7 @@ async function joinRoom(name, code, pin) {
 
 async function leaveRoom(auto = false, reason = "leave") {
   if (!currentUser || isSessionTeardownInProgress) return;
+  if (auto && shouldSuppressForcedSessionCleanup(reason)) return;
   isSessionTeardownInProgress = true;
   stopSessionHeartbeat();
   clearTimeout(visibilitySyncTimeout);
@@ -5280,6 +5329,7 @@ async function cleanupSession(reason = "manual_leave", options = {}) {
 
   if (SESSION_LIFECYCLE_V2.cleanupPromise) return SESSION_LIFECYCLE_V2.cleanupPromise;
   if (!currentUser && !currentSessionToken) return false;
+  if (shouldSuppressForcedSessionCleanup(normalizedReason)) return false;
 
   const snapshot = {
     ...(currentUser || {}),
@@ -5742,7 +5792,7 @@ async function refreshAttendanceViews(options = {}) {
   try {
     const seatsSnap = await db.ref("seats").get();
     const freshSeats = Object.values(seatsSnap.val() || {}).filter((u) => isPresenceFresh(u));
-    if (freshSeats.length === 0) {
+    if (freshSeats.length === 0 && !isCurrentSessionFreshPresence()) {
       await forceOfflineZeroOnlineUsers();
     }
   } catch (_) {}
