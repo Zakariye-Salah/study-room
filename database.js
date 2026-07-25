@@ -220,8 +220,11 @@ let activeAttendanceReportUser = "all";
 let activeAttendanceReportLimit = 10;
 const ACTIVE_PRESENCE_GRACE_MS = 90000;
 const HIDDEN_PRESENCE_GRACE_MS = 15 * 60 * 1000;
+const RECENT_JOIN_GRACE_MS = 20000;
 const HEARTBEAT_INTERVAL_MS = 15000;
 const COURSE_SESSION_COLLECTION = "courseSessions";
+const COURSE_LOCK_PATH = "courseSessionLocks/full-stack-ai-engineer";
+let currentCourseLockSnapshot = null;
 
 let activeAttendanceEventsCache = [];
 let liveAttendanceLogLimit = parseInt(localStorage.getItem("attendance_log_limit") || "5", 10);
@@ -232,6 +235,96 @@ let immediateStaleSweepTimeout = null;
 let immediateStaleSweepForce = false;
 let lastSeatsPresenceSignature = "";
 let lastOnlinePresenceSignature = "";
+let onlineCountRenderTimeout = null;
+let lastRenderedOnlineCount = null;
+
+function updateOnlineCountBadgeStable(nextCount) {
+  const count = Math.max(0, Number(nextCount) || 0);
+  if (!onlineCount) return;
+  if (onlineCountRenderTimeout) clearTimeout(onlineCountRenderTimeout);
+  const delay = count === 0 ? 260 : 90;
+  onlineCountRenderTimeout = setTimeout(() => {
+    if (lastRenderedOnlineCount === count) return;
+    lastRenderedOnlineCount = count;
+    onlineCount.innerText = String(count);
+    onlineCount.classList.toggle("counter-online", count > 0);
+    onlineCount.classList.toggle("counter-offline", count === 0);
+  }, delay);
+}
+
+let adminSeatDashboardRefreshTimeout = null;
+let adminSeatDashboardListenersBound = false;
+
+function buildAdminSeatPresenceRecord(code, seats = {}, seatLeases = {}, onlineUsers = {}) {
+  const normalizedCode = normalizeSeatCode(code);
+  const seatEntry = seats?.[normalizedCode] || null;
+  const leaseEntry = seatLeases?.[normalizedCode] || null;
+  const onlineEntry = Object.values(onlineUsers || {}).find(user => normalizeSeatCode(user?.code || user?.seat || "--") === normalizedCode) || null;
+
+  const merged = {
+    ...(seatEntry || {}),
+    ...(leaseEntry || {}),
+    ...(onlineEntry || {}),
+    code: normalizedCode,
+    seat: normalizedCode
+  };
+
+  if (!merged.id && onlineEntry?.id) merged.id = onlineEntry.id;
+  if (!merged.id && seatEntry?.id) merged.id = seatEntry.id;
+  if (!merged.id && leaseEntry?.ownerId) merged.id = leaseEntry.ownerId;
+
+  return isPresenceFresh(merged) || isLeaseFresh(merged) ? merged : null;
+}
+
+function scheduleAdminSeatDashboardRefresh() {
+  if (adminSeatDashboardRefreshTimeout) clearTimeout(adminSeatDashboardRefreshTimeout);
+  adminSeatDashboardRefreshTimeout = setTimeout(() => {
+    refreshAdminSeatDashboardStatuses().catch(() => {});
+  }, 60);
+}
+
+async function refreshAdminSeatDashboardStatuses() {
+  if (!isAdminAuthenticated || !adminSeatsDashboard) return;
+
+  const [seatsSnap, leasesSnap, onlineSnap] = await Promise.all([
+    db.ref("seats").get().catch(() => null),
+    db.ref("seatLeases").get().catch(() => null),
+    db.ref("onlineUsers").get().catch(() => null)
+  ]);
+
+  const seats = seatsSnap && seatsSnap.val ? (seatsSnap.val() || {}) : {};
+  const seatLeases = leasesSnap && leasesSnap.val ? (leasesSnap.val() || {}) : {};
+  const onlineUsers = onlineSnap && onlineSnap.val ? (onlineSnap.val() || {}) : {};
+
+  Object.keys(SEATS).forEach(code => {
+    const statusText = document.getElementById(`admin-seat-status-${code}`);
+    const kickBtn = document.getElementById(`btn-kick-${code}`);
+    if (!statusText) return;
+
+    const activeRecord = buildAdminSeatPresenceRecord(code, seats, seatLeases, onlineUsers);
+
+    if (activeRecord) {
+      const who = escapeHtml(activeRecord.name || SEATS[code]?.name || "Unknown");
+      const seatLabel = escapeHtml(normalizeSeatCode(activeRecord.code || code));
+      statusText.innerHTML = `<span class="text-success" style="color:var(--color-success); font-weight:700;">Active</span><span style="margin-left:6px;">${who}</span><span style="margin-left:6px; opacity:.75;">Seat ${seatLabel}</span>`;
+      if (kickBtn) kickBtn.classList.remove("hidden");
+    } else {
+      statusText.innerText = "Offline";
+      if (kickBtn) kickBtn.classList.add("hidden");
+    }
+  });
+}
+
+function bindAdminSeatDashboardPresenceListeners() {
+  if (adminSeatDashboardListenersBound) return;
+  adminSeatDashboardListenersBound = true;
+
+  const queueRefresh = () => scheduleAdminSeatDashboardRefresh();
+  db.ref("seats").on("value", queueRefresh);
+  db.ref("seatLeases").on("value", queueRefresh);
+  db.ref("onlineUsers").on("value", queueRefresh);
+  queueRefresh();
+}
 const ATTENDANCE_REFRESH_INTERVAL_MS = 10000; // safer for Firebase free plan
 
 const ATTENDANCE_EVENT_CACHE_KEY = "__study_room_attendance_event_cache__";
@@ -377,6 +470,7 @@ const JOIN_WELCOME_MESSAGES = [
 let currentDeviceId = localStorage.getItem("device_id") || "";
 let currentTabId = sessionStorage.getItem("active_tab_id") || "";
 let currentSessionToken = sessionStorage.getItem("active_session_token") || "";
+let currentSessionInstanceId = createStableId("instance");
 let isSessionTeardownInProgress = false;
 let visibilitySyncTimeout = null;
 
@@ -603,8 +697,8 @@ function formatElapsedDuration(ms) {
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
 
-  if (hours > 0) return `${hours}h ${pad2(minutes)}m`;
-  if (minutes > 0) return `${minutes}m ${pad2(seconds)}s`;
+  if (hours > 0) return `${hours}:${pad2(minutes)}:${pad2(seconds)}`;
+  if (minutes > 0) return `${minutes}m`;
   return `${seconds}s`;
 }
 
@@ -724,6 +818,15 @@ function isCurrentSessionFreshPresence(now = Date.now()) {
   return !!snapshot && isPresenceFresh(snapshot) && !isSessionOverLimit(snapshot, now);
 }
 
+function isTransientSessionLoss(record = null) {
+  const now = Date.now();
+  const candidate = record || currentUser || {};
+  const joinedAt = Number(candidate.roomJoinedAt || candidate.joinedAt || candidate.start || 0) || 0;
+  if (joinedAt && (now - joinedAt) < RECENT_JOIN_GRACE_MS) return true;
+  if (record && record.sessionToken && isPresenceFresh(record)) return true;
+  return isCurrentSessionFreshPresence(now);
+}
+
 function shouldSuppressForcedSessionCleanup(reason = "") {
   const normalized = String(reason || "").trim().toLowerCase();
   const guardedReasons = new Set([
@@ -800,6 +903,7 @@ function buildPresencePayload(extra = {}) {
     expiresAt,
     deviceId: currentDeviceId,
     tabId: currentTabId,
+    instanceId: currentSessionInstanceId,
     sessionToken: currentSessionToken,
     visibilityState: getCurrentVisibilityState(),
     inCourse: !!currentUser.inCourse,
@@ -1127,6 +1231,55 @@ function normalizeCourseSessionRecord(sessionId, record = {}, fallback = {}) {
     startLabel: record.startLabel || fallback.startLabel || "",
     endLabel: record.endLabel || fallback.endLabel || ""
   };
+}
+
+
+function isCourseLockFresh(lock = null) {
+  return isPresenceFresh(lock);
+}
+
+function buildCourseLockPayload(extra = {}) {
+  if (!currentUser || !currentSessionToken) return null;
+  const now = Date.now();
+  return {
+    ...buildPresencePayload({
+      inCourse: true,
+      activeCourseName: currentUser.activeCourseName || "Full Stack AI Engineer",
+      courseEnteredAt: currentUser.courseEnteredAt || now,
+      updatedAt: now
+    }),
+    ...extra,
+    seat: currentUser.code,
+    code: currentUser.code,
+    seatCode: currentUser.code,
+    ownerId: currentUser.id,
+    id: currentUser.id,
+    name: currentUser.name,
+    sessionToken: currentSessionToken,
+    deviceId: currentDeviceId,
+    tabId: currentTabId,
+    inCourse: true,
+    activeCourseName: currentUser.activeCourseName || "Full Stack AI Engineer",
+    courseEnteredAt: currentUser.courseEnteredAt || now,
+    status: "active",
+    lastSeen: now,
+    heartbeatAt: now,
+    updatedAt: now
+  };
+}
+
+function renderCourseOccupancyBanner(lockRecord = null) {
+  if (!courseActiveOccupantSublabel) return;
+  const lock = lockRecord && isCourseLockFresh(lockRecord) ? lockRecord : null;
+  if (!lock) {
+    courseActiveOccupantSublabel.innerHTML = `<span class="course-alert-available-tag"><i class="bi bi-check-circle-fill"></i> Workspace Available Now</span>`;
+    return;
+  }
+  const occupantName = escapeHtml(lock.name || lock.fullName || "Unknown");
+  const occupantSeat = escapeHtml(normalizeSeatCode(lock.seat || lock.code || "--"));
+  const sinceTs = getSessionCourseStartTimestamp(lock, Number(lock.courseEnteredAt || lock.lastSeen || lock.heartbeatAt || Date.now()));
+  const sinceLabel = escapeHtml(formatAbsoluteDateTime(sinceTs));
+  courseActiveOccupantSublabel.innerHTML = `<span class="course-alert-occupied-tag"><i class="bi bi-exclamation-triangle-fill"></i> Workspace is not available now — ${occupantName} (Seat ${occupantSeat}) • Since: ${sinceLabel}</span>`;
 }
 
 async function findOpenCourseSessionId(code = "", sessionToken = "") {
@@ -1769,6 +1922,17 @@ function formatAttendanceActionLabel(event) {
   let icon = 'bi-clock';
   let iconClass = 'icon-leave';
 
+  const joinedAt = Number(event.courseEnteredAt || event.joinedAt || event.roomJoinedAt || event.start || 0) || 0;
+  const leftAt = Number(event.leftAt || event.time || 0) || 0;
+  const computedDuration = Math.max(0, (leftAt || Date.now()) - (joinedAt || leftAt || Date.now()));
+  const durationMs = Number(event.sessionDuration || event.courseDuration || event.duration || 0) || computedDuration;
+  const durationText = formatSessionDuration(durationMs);
+  const joinedLabel = joinedAt ? formatAbsoluteDateTime(joinedAt) : '—';
+  const leftLabel = leftAt ? formatAbsoluteDateTime(leftAt) : timeStr;
+  const reasonLabel = event.reason ? escapeHtml(formatAttendanceReasonLabel(event.reason)) : '';
+  const courseName = escapeHtml(event.courseName || event.activeCourseName || 'Full Stack AI Engineer');
+  const courseIcon = `<i class="bi bi-mortarboard-fill"></i>`;
+
   if (event.action === 'join') {
     icon = 'bi-box-arrow-in-right';
     iconClass = 'icon-join';
@@ -1780,10 +1944,9 @@ function formatAttendanceActionLabel(event) {
   } else if (event.action === 'course-leave') {
     icon = 'bi-laptop';
     iconClass = 'icon-leave';
-    const durationText = event.sessionDuration ? formatSessionDuration(event.sessionDuration) : '0m';
-    body = `${nameHtml} left the course ${seatHtml} <span class="clean-att-duration-pill">${durationText}</span>`;
-    if (event.reason) {
-      body += ` <span class="clean-att-duration-pill">${escapeHtml(formatAttendanceReasonLabel(event.reason))}</span>`;
+    body = `${nameHtml} left the course ${seatHtml} <span class="clean-att-duration-pill">${courseIcon} ${courseName}</span><span class="clean-att-duration-pill">Joined: ${escapeHtml(joinedLabel)}</span><span class="clean-att-duration-pill">Left: ${escapeHtml(leftLabel)}</span><span class="clean-att-duration-pill">${escapeHtml(durationText)}</span>`;
+    if (reasonLabel) {
+      body += ` <span class="clean-att-duration-pill">${reasonLabel}</span>`;
     }
   } else if (event.action === 'hand-raise') {
     icon = 'bi-hand-index-thumb';
@@ -1793,15 +1956,16 @@ function formatAttendanceActionLabel(event) {
     icon = 'bi-hand-index-thumb';
     iconClass = 'icon-hand-lower';
     body = `${nameHtml} lowered the hand ✋️ ${seatHtml}`;
-    if (event.reason) {
-      body += ` <span class="clean-att-duration-pill">${escapeHtml(formatAttendanceReasonLabel(event.reason))}</span>`;
+    if (reasonLabel) {
+      body += ` <span class="clean-att-duration-pill">${reasonLabel}</span>`;
     }
   } else {
     icon = 'bi-box-arrow-left';
     iconClass = 'icon-leave';
-    body = `${nameHtml} left the room ${seatHtml}`;
-    if (event.reason) {
-      body += ` <span class="clean-att-duration-pill">${escapeHtml(formatAttendanceReasonLabel(event.reason))}</span>`;
+    const actionText = event.action === 'terminated' ? 'was removed from the room' : 'left the room';
+    body = `${courseIcon} ${nameHtml} ${actionText} ${seatHtml} <span class="clean-att-duration-pill">${courseName}</span><span class="clean-att-duration-pill">Joined: ${escapeHtml(joinedLabel)}</span><span class="clean-att-duration-pill">Left: ${escapeHtml(leftLabel)}</span><span class="clean-att-duration-pill">${escapeHtml(durationText)}</span>`;
+    if (reasonLabel) {
+      body += ` <span class="clean-att-duration-pill">${reasonLabel}</span>`;
     }
   }
 
@@ -2597,7 +2761,7 @@ function scheduleImmediateStaleSessionSweep(force = false) {
     // join/heartbeat writes have propagated.
     if (currentUser && !isSessionTeardownInProgress) {
       const joinedAt = Number(currentUser.roomJoinedAt || currentUser.joinedAt || currentUser.start || 0) || 0;
-      if (joinedAt && (Date.now() - joinedAt) < 5000) {
+      if (joinedAt && (Date.now() - joinedAt) < RECENT_JOIN_GRACE_MS) {
         immediateStaleSweepTimeout = null;
         immediateStaleSweepForce = false;
         return;
@@ -2640,18 +2804,7 @@ async function sweepStaleSessions(options = {}) {
 }
 
 async function forceOfflineZeroOnlineUsers() {
-  try {
-    if (currentUser) return false;
-    if (isCurrentSessionFreshPresence()) return false;
-    const snap = await db.ref("onlineUsers").get();
-    const users = snap.val() || {};
-    const freshUsers = Object.values(users).filter(u => isPresenceFresh(u));
-    if (freshUsers.length > 0) return false;
-    await sweepStaleSessions({ force: true, forceReason: "force-kicked" });
-    return true;
-  } catch (_) {
-    return false;
-  }
+  return false;
 }
 
 function startStaleSessionMonitor() {
@@ -2659,12 +2812,9 @@ function startStaleSessionMonitor() {
   const runMonitorTick = () => {
     if (currentUser) {
       const joinedAt = Number(currentUser.roomJoinedAt || currentUser.joinedAt || currentUser.start || 0) || 0;
-      if (joinedAt && (Date.now() - joinedAt) < 5000) return;
+      if (joinedAt && (Date.now() - joinedAt) < RECENT_JOIN_GRACE_MS) return;
     }
     sweepStaleSessions().catch(() => {});
-    if (!currentUser && !isCurrentSessionFreshPresence()) {
-      forceOfflineZeroOnlineUsers().catch(() => {});
-    }
   };
   runMonitorTick();
   staleSessionMonitorInterval = setInterval(runMonitorTick, 60000);
@@ -2700,7 +2850,7 @@ window.resetUserSecurityPin = function(seatCode) {
 function stopTimer() {
   clearInterval(timerInterval);
   clearTimeout(autoRemovalTimeoutInstance);
-  timerBox.innerText = "0m 0s";
+  timerBox.innerText = formatElapsedDuration(0);
   personalWeeklyBox.classList.add("hidden");
 }
 
@@ -2891,16 +3041,19 @@ async function joinRoom(name, code, pin) {
   }
 
   const seatRef = db.ref("seats/" + normalizedCode);
-  const snap = await seatRef.get();
-  if (snap.exists() && isPresenceFresh(snap.val())) {
-    toast("Resource collision: Seat node is already occupied.", "error");
-    return;
-  }
-
   const leaseRef = db.ref(`seatLeases/${normalizedCode}`);
-  const leaseSnap = await leaseRef.get();
-  if (leaseSnap.exists() && isLeaseFresh(leaseSnap.val()) && leaseSnap.val().sessionToken !== currentSessionToken) {
-    toast("Resource collision: Seat node is already leased by another active session.", "error");
+  const occupancySnap = await Promise.all([
+    seatRef.get().catch(() => null),
+    leaseRef.get().catch(() => null)
+  ]).then(([seatSnapshot, leaseSnapshot]) => ({
+    seat: seatSnapshot && seatSnapshot.val ? seatSnapshot.val() : null,
+    lease: leaseSnapshot && leaseSnapshot.val ? leaseSnapshot.val() : null
+  }));
+
+  const seatSnapshotFresh = occupancySnap.seat && isPresenceFresh(occupancySnap.seat);
+  const leaseSnapshotFresh = occupancySnap.lease && isLeaseFresh(occupancySnap.lease);
+  if ((seatSnapshotFresh || leaseSnapshotFresh) && String(occupancySnap.lease?.sessionToken || occupancySnap.seat?.sessionToken || "") !== String(currentSessionToken || "")) {
+    toast("This seat is already active and taken. Sorry.", "error");
     return;
   }
 
@@ -2946,9 +3099,7 @@ async function joinRoom(name, code, pin) {
     localStorage.setItem("recaps_active_language", activeRecapFilter);
   }
 
-  await seatRef.set(currentUser);
-  await db.ref("onlineUsers/" + userId).set(currentUser);
-  await leaseRef.set({
+  const leasePayload = {
     seat: normalizedCode,
     name: targetSeat.name,
     ownerId: userId,
@@ -2965,8 +3116,31 @@ async function joinRoom(name, code, pin) {
     status: currentUser.status,
     leftAt: 0,
     lastSeen: now,
-    heartbeatAt: now
-  });
+    heartbeatAt: now,
+    updatedAt: now
+  };
+
+  const claimTxn = await leaseRef.transaction((existing) => {
+    if (existing && isLeaseFresh(existing)) {
+      const sameSession = String(existing.sessionToken || "") === String(currentSessionToken || "");
+      const sameDevice = String(existing.deviceId || "") === String(currentDeviceId || "");
+      const sameTab = String(existing.tabId || "") === String(currentTabId || "");
+      if (!sameSession || !sameDevice || !sameTab) {
+        return;
+      }
+    }
+    return leasePayload;
+  }).catch(() => null);
+
+  if (!claimTxn || claimTxn.committed === false) {
+    toast("This seat is already active and taken. Sorry.", "error");
+    return;
+  }
+
+  await Promise.all([
+    seatRef.set(currentUser),
+    db.ref("onlineUsers/" + userId).set(currentUser)
+  ]);
 
   await registerSessionDisconnectHandlers().catch(() => {});
 
@@ -3134,63 +3308,54 @@ async function openCourseEmbedWindow() {
     return;
   }
 
-  const [leaseSnap, seatSnap] = await Promise.all([
-    db.ref("seatLeases").get(),
-    db.ref("seats").get()
-  ]);
-  let currentOccupantName = "";
-  let currentOccupantSeat = "";
-  let courseOccupied = false;
+  const now = Date.now();
+  const lockRef = db.ref(COURSE_LOCK_PATH);
+  const lockPayload = buildCourseLockPayload({
+    seat: currentUser.code,
+    code: currentUser.code,
+    ownerId: currentUser.id,
+    id: currentUser.id,
+    name: currentUser.name,
+    sessionToken: currentSessionToken,
+    inCourse: true,
+    activeCourseName: "Full Stack AI Engineer",
+    courseEnteredAt: getSessionCourseStartTimestamp(currentUser, now),
+    status: "active",
+    lastSeen: now,
+    heartbeatAt: now,
+    updatedAt: now
+  });
 
-  const inspectOccupants = (snapshot) => {
-    if (!snapshot || !snapshot.exists()) return;
-    Object.values(snapshot.val() || {}).forEach(u => {
-      if (courseOccupied) return;
-      if (u.inCourse && u.ownerId !== currentUser.id && isLeaseFresh(u) && !isSessionOverLimit(u)) {
-        courseOccupied = true;
-        currentOccupantName = u.name;
-        currentOccupantSeat = u.seat || u.code;
+  const txn = await lockRef.transaction((current) => {
+    if (current && isCourseLockFresh(current)) {
+      const sameSession = String(current.sessionToken || "") === String(currentSessionToken || "");
+      const sameDevice = String(current.deviceId || "") === String(currentDeviceId || "");
+      const sameTab = String(current.tabId || "") === String(currentTabId || "");
+      if (!sameSession || !sameDevice || !sameTab) {
+        return;
       }
-    });
-  };
+    }
+    return lockPayload;
+  }).catch(() => null);
 
-  inspectOccupants(leaseSnap);
-  inspectOccupants(seatSnap);
-
-  if (courseOccupied) {
+  if (!txn || txn.committed === false) {
     playCourseOccupiedAlarm();
-    toast(`CRITICAL RISK ACCESS ERROR: Course resource currently claimed by ${currentOccupantName} (Seat ${currentOccupantSeat})!`, "danger-alert-occupied");
-    triggerTitleDangerAlert("🚨 DANGER ALERT", "⚠️ WORKSPACE COLLISION");
+    renderCourseOccupancyBanner(currentCourseLockSnapshot);
+    toast("Workspace is not available now.", "danger-alert-occupied");
+    triggerTitleDangerAlert("🚨 WORKSPACE UNAVAILABLE", "⚠️ WORKSPACE OCCUPIED");
     return;
   }
 
+  currentCourseLockSnapshot = lockPayload;
   currentUser.inCourse = true;
   currentUser.activeCourseName = "Full Stack AI Engineer";
-  currentUser.courseEnteredAt = Date.now();
-  currentUser.lastSeen = Date.now();
-  currentUser.heartbeatAt = Date.now();
-  currentCourseSessionId = await findOpenCourseSessionId(currentUser.code, currentSessionToken) || db.ref(COURSE_SESSION_COLLECTION).push().key;
+  currentUser.courseEnteredAt = now;
+  currentUser.lastSeen = now;
+  currentUser.heartbeatAt = now;
   syncBrowserTitle();
-  await db.ref(`seatLeases/${currentUser.code}`).transaction((current) => {
-    if (current && current.sessionToken && current.sessionToken !== currentSessionToken) {
-      return;
-    }
-    return {
-      seat: currentUser.code,
-      name: currentUser.name,
-      ownerId: currentUser.id,
-      deviceId: currentDeviceId,
-      tabId: currentTabId,
-      sessionToken: currentSessionToken,
-      inCourse: true,
-      activeCourseName: currentUser.activeCourseName,
-      courseEnteredAt: getSessionCourseStartTimestamp(currentUser, now),
-      start: currentUser.start,
-      lastSeen: Date.now(),
-      heartbeatAt: Date.now()
-    };
-  });
+  await registerSessionDisconnectHandlers().catch(() => {});
 
+  currentCourseSessionId = await findOpenCourseSessionId(currentUser.code, currentSessionToken) || db.ref(COURSE_SESSION_COLLECTION).push().key;
   const activeCourseSessionRef = db.ref(`${COURSE_SESSION_COLLECTION}/${currentCourseSessionId}`);
   const activeCourseSessionSnap = await activeCourseSessionRef.get().catch(() => null);
   if (activeCourseSessionSnap && activeCourseSessionSnap.exists && activeCourseSessionSnap.exists()) {
@@ -3200,7 +3365,9 @@ async function openCourseEmbedWindow() {
       courseName: currentUser.activeCourseName,
       sessionToken: currentSessionToken,
       roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || currentUser.courseEnteredAt,
-      startLabel: formatAbsoluteDateTime(Number(activeCourseSessionSnap.val()?.start) || currentUser.courseEnteredAt)
+      startLabel: formatAbsoluteDateTime(Number(activeCourseSessionSnap.val()?.start) || currentUser.courseEnteredAt),
+      updatedAt: now,
+      status: "active"
     }).catch(() => {});
   } else {
     await activeCourseSessionRef.set({
@@ -3214,26 +3381,50 @@ async function openCourseEmbedWindow() {
       end: 0,
       duration: 0,
       status: "active"
-    });
+    }).catch(() => {});
   }
 
-  await db.ref("onlineUsers/" + currentUser.id).update({
+  await db.ref(`seatLeases/${currentUser.code}`).update({
     inCourse: true,
     activeCourseName: currentUser.activeCourseName,
     roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || 0,
     courseEnteredAt: getSessionCourseStartTimestamp(currentUser, now),
-    lastSeen: currentUser.lastSeen,
-    heartbeatAt: currentUser.heartbeatAt
-  });
+    lastSeen: now,
+    heartbeatAt: now,
+    status: "active",
+    sessionToken: currentSessionToken,
+    deviceId: currentDeviceId,
+    tabId: currentTabId,
+    updatedAt: now
+  }).catch(() => {});
 
   await db.ref("seats/" + currentUser.code).update({
     inCourse: true,
     activeCourseName: currentUser.activeCourseName,
     roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || 0,
     courseEnteredAt: getSessionCourseStartTimestamp(currentUser, now),
-    lastSeen: currentUser.lastSeen,
-    heartbeatAt: currentUser.heartbeatAt
-  });
+    lastSeen: now,
+    heartbeatAt: now,
+    status: "active",
+    sessionToken: currentSessionToken,
+    deviceId: currentDeviceId,
+    tabId: currentTabId,
+    updatedAt: now
+  }).catch(() => {});
+
+  await db.ref("onlineUsers/" + currentUser.id).update({
+    inCourse: true,
+    activeCourseName: currentUser.activeCourseName,
+    roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || 0,
+    courseEnteredAt: getSessionCourseStartTimestamp(currentUser, now),
+    lastSeen: now,
+    heartbeatAt: now,
+    status: "active",
+    sessionToken: currentSessionToken,
+    deviceId: currentDeviceId,
+    tabId: currentTabId,
+    updatedAt: now
+  }).catch(() => {});
 
   await pushAttendanceOnce({
     name: currentUser.name,
@@ -3250,7 +3441,9 @@ async function openCourseEmbedWindow() {
   updateCourseActionButton();
   focusDefaultCourseAction();
   renderLessonsUI();
-  window.open("https://dugsiiye.com/dashboard/student", "_blank");
+  renderCourseOccupancyBanner(currentCourseLockSnapshot);
+  toast("Course mode enabled. Opening Dugsiiye in a new tab.", "success");
+  window.open("https://dugsiiye.com/auth/login?redirect=%2Fdashboard%2Fstudent", "_blank", "noopener,noreferrer");
 }
 
 async function handleCourseActionButtonClick() {
@@ -3433,6 +3626,8 @@ async function toggleMyHandRaise() {
   currentUser.handRaisedAt = nextRaisedAt;
   const payload = buildPresencePayload({ handRaised: nextState, handRaisedAt: nextRaisedAt });
   await Promise.all([
+    db.ref(`sessions/${currentSessionToken}`).update(payload).catch(() => {}),
+    db.ref(`seatLeases/${currentUser.code}`).update(payload).catch(() => {}),
     db.ref(`onlineUsers/${currentUser.id}`).update(payload).catch(() => {}),
     db.ref(`seats/${currentUser.code}`).update(payload).catch(() => {})
   ]);
@@ -3803,32 +3998,11 @@ function initRealtimeDatabaseListeners() {
     if (seatsSignature !== lastSeatsPresenceSignature) {
       lastSeatsPresenceSignature = seatsSignature;
     }
-    const freshSeats = Object.values(activeSeats).filter(u => isPresenceFresh(u));
-    let count = freshSeats.length;
-    onlineCount.innerText = count;
-    onlineCount.classList.toggle("counter-online", count > 0);
-    onlineCount.classList.toggle("counter-offline", count === 0);
+  });
 
-    let isOccupied = false;
-    let userCourseName = "";
-    let occupantSeatLabel = "";
-    let entryTimestamp = 0;
-
-    freshSeats.forEach(u => {
-      if (u.inCourse) {
-        isOccupied = true;
-        userCourseName = u.activeCourseName || "Full Stack AI Engineer";
-        occupantSeatLabel = u.code;
-        entryTimestamp = getSessionCourseStartTimestamp(u, Date.now());
-      }
-    });
-
-    if (isOccupied) {
-      let formattedTime = formatAbsoluteDateTime(entryTimestamp);
-      courseActiveOccupantSublabel.innerHTML = `<span class="course-alert-occupied-tag"><i class="bi bi-exclamation-triangle-fill"></i> Resource Engaged: ${userCourseName} (Seat ${occupantSeatLabel}) at ${formattedTime}</span>`;
-    } else {
-      courseActiveOccupantSublabel.innerHTML = `<span class="course-alert-available-tag"><i class="bi bi-check-circle-fill"></i> Workspace Available Now</span>`;
-    }
+  db.ref(COURSE_LOCK_PATH).on("value", (snap) => {
+    currentCourseLockSnapshot = snap.val() || null;
+    renderCourseOccupancyBanner(currentCourseLockSnapshot);
   });
 
   db.ref("onlineUsers").on("value", (snap) => {
@@ -3861,17 +4035,8 @@ function initRealtimeDatabaseListeners() {
     refreshRaisedHandsBoard(freshUsers);
 
     const onlineCountValue = freshUsers.length;
-    if (onlineCount) {
-      onlineCount.innerText = onlineCountValue;
-      onlineCount.classList.toggle("counter-online", onlineCountValue > 0);
-      onlineCount.classList.toggle("counter-offline", onlineCountValue === 0);
-    }
+    updateOnlineCountBadgeStable(onlineCountValue);
 
-    // Avoid forcing a stale sweep during the first moments after a fresh join.
-    // A temporary zero-count snapshot can happen before presence propagates.
-    if (onlineCountValue === 0 && !currentUser && !isSessionTeardownInProgress) {
-      scheduleImmediateStaleSessionSweep(true);
-    }
 
     if (freshUsers.length === 0) {
       usersList.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-secondary); font-size:13px;">No developers currently active in workspace.</div>';
@@ -3885,6 +4050,7 @@ function initRealtimeDatabaseListeners() {
 
       const roomJoinedLabel = formatAbsoluteDateTime(getSessionRoomStartTimestamp(u));
       const courseJoinedLabel = u.inCourse && u.courseEnteredAt ? formatAbsoluteDateTime(getSessionCourseStartTimestamp(u)) : "";
+      const displayName = u.inCourse ? `Eng ${u.name}` : u.name;
 
       let badgeHtml = "";
       if (u.inCourse) {
@@ -3902,10 +4068,10 @@ function initRealtimeDatabaseListeners() {
 
       card.innerHTML = `
         <div class="left-info-block">
-          <div class="name">${escapeHtml(u.name)} ${badgeHtml} ${handStatusHtml}</div>
+          <div class="name">${escapeHtml(displayName)} ${badgeHtml} ${handStatusHtml}</div>
           <div class="student-session-meta">
             <span class="student-session-meta-line"><i class="bi bi-box-arrow-in-right"></i> Room joined: ${escapeHtml(roomJoinedLabel)}</span>
-            ${u.inCourse ? `<span class="student-session-meta-line course"><i class="bi bi-mortarboard-fill"></i> Course entered: ${escapeHtml(courseJoinedLabel)}</span>` : ''}
+            ${u.inCourse ? `<span class="student-session-meta-line course"><i class="bi bi-mortarboard-fill"></i> Since: ${escapeHtml(courseJoinedLabel)}</span>` : ''}
           </div>
           <div class="live-elapsed-badge" data-start="${getSessionRoomStartTimestamp(u)}">0s</div>
         </div>
@@ -4022,14 +4188,14 @@ adminLogoutBtn.addEventListener("click", async () => {
 
 function buildAdminDashboardDeck() {
   adminSeatsDashboard.innerHTML = "";
-  
+
   Object.keys(SEATS).forEach(code => {
     const config = SEATS[code];
     const row = document.createElement("div");
     row.className = "recap-analytics-row";
     row.style.gridTemplateColumns = "1.2fr 0.8fr 1.5fr";
     row.style.padding = "10px 0";
-    
+
     row.innerHTML = `
       <div style="font-weight:700; font-size:13px;">Seat ${code} (${config.name})</div>
       <div id="admin-seat-status-${code}" style="font-size:12px; color:var(--text-secondary);">Offline</div>
@@ -4042,22 +4208,8 @@ function buildAdminDashboardDeck() {
     adminSeatsDashboard.appendChild(row);
   });
 
-  db.ref("seats").on("value", (snap) => {
-    const active = snap.val() || {};
-    Object.keys(SEATS).forEach(code => {
-      const statusText = document.getElementById(`admin-seat-status-${code}`);
-      const kickBtn = document.getElementById(`btn-kick-${code}`);
-      if (!statusText) return;
-
-      if (active[code]) {
-        statusText.innerHTML = '<span class="text-success" style="color:var(--color-success); font-weight:700;">Active</span>';
-        if (kickBtn) kickBtn.classList.remove("hidden");
-      } else {
-        statusText.innerText = "Offline";
-        if (kickBtn) kickBtn.classList.add("hidden");
-      }
-    });
-  });
+  bindAdminSeatDashboardPresenceListeners();
+  refreshAdminSeatDashboardStatuses().catch(() => {});
 
   db.ref("blockedSeats").on("value", (snap) => {
     const blocked = snap.val() || {};
@@ -4075,6 +4227,7 @@ function buildAdminDashboardDeck() {
     });
   });
 }
+
 
 window.toggleSeatBlock = async function(code) {
   if (!isAdminAuthenticated) return;
@@ -4465,6 +4618,7 @@ async function bootstrapApplicationWorkspaceRuntime() {
     const restoredUser = onlineSnap.exists() ? onlineSnap.val() : null;
     if (restoredUser && storedSessionToken && restoredUser.sessionToken === storedSessionToken && isPresenceFresh(restoredUser)) {
       currentUser = { ...restoredUser, handRaised: !!restoredUser.handRaised, handRaisedAt: restoredUser.handRaisedAt || 0 };
+      currentSessionInstanceId = restoredUser.instanceId || currentSessionInstanceId;
       currentUser.name = getCanonicalSeatName(currentUser.code, currentUser.name);
       const restoredJoinedAt = getSessionRoomStartTimestamp(currentUser, Date.now());
       currentUser.joinedAt = restoredJoinedAt;
@@ -4807,6 +4961,7 @@ function buildDisconnectTombstone(reason = "tab_closed", leaveTime = Date.now())
     leaveReason: normalized,
     leftAt: now,
     status: "offline",
+    instanceId: currentSessionInstanceId,
     updatedAt: now
   };
 }
@@ -4823,6 +4978,8 @@ function buildCleanupAttendanceEvents(snapshot, reason, scope, leaveTime) {
   const courseName = snapshot.activeCourseName || "Full Stack AI Engineer";
   const wasInCourse = !!snapshot.inCourse;
   const wasHandRaised = !!snapshot.handRaised;
+  const roomDuration = Math.max(0, time - roomJoinedAt);
+  const courseDuration = Math.max(0, time - courseEnteredAt);
 
   if (wasHandRaised) {
     events.push({
@@ -4850,6 +5007,8 @@ function buildCleanupAttendanceEvents(snapshot, reason, scope, leaveTime) {
       time,
       joinedAt: roomJoinedAt,
       leftAt: time,
+      sessionDuration: Math.max(0, Math.min(SESSION_LIMIT, courseDuration)),
+      courseDuration: Math.max(0, Math.min(SESSION_LIMIT, courseDuration)),
       courseEnteredAt,
       courseName,
       reason: normalizedReason,
@@ -4868,6 +5027,8 @@ function buildCleanupAttendanceEvents(snapshot, reason, scope, leaveTime) {
       time,
       joinedAt: roomJoinedAt,
       leftAt: time,
+      sessionDuration: Math.max(0, Math.min(SESSION_LIMIT, courseDuration)),
+      courseDuration: Math.max(0, Math.min(SESSION_LIMIT, courseDuration)),
       courseEnteredAt,
       courseName,
       reason: normalizedReason,
@@ -4886,7 +5047,8 @@ function buildCleanupAttendanceEvents(snapshot, reason, scope, leaveTime) {
     leftAt: time,
     roomJoinedAt,
     courseEnteredAt,
-    sessionDuration: Math.max(0, time - roomJoinedAt),
+    sessionDuration: Math.max(0, Math.min(SESSION_LIMIT, roomDuration)),
+    courseDuration: wasInCourse ? Math.max(0, Math.min(SESSION_LIMIT, courseDuration)) : 0,
     reason: normalizedReason,
     cleanupReason: normalizedReason,
     courseName
@@ -4952,11 +5114,14 @@ function detachSessionWatchers() {
 
 async function cancelSessionDisconnectHandlers(code = "", id = "") {
   const removals = [];
+  const sessionToken = SESSION_LIFECYCLE_V2.sessionToken || currentSessionToken || "";
+  const courseLockRef = db.ref(COURSE_LOCK_PATH);
   if (code) {
     const refs = [
-      db.ref(`sessions/${SESSION_LIFECYCLE_V2.sessionToken || currentSessionToken || ""}`),
+      db.ref(`sessions/${sessionToken}`),
       db.ref(`seatLeases/${code}`),
-      db.ref(`seats/${code}`)
+      db.ref(`seats/${code}`),
+      courseLockRef
     ];
     refs.forEach((ref) => removals.push(ref.onDisconnect().cancel().catch(() => {})));
   }
@@ -4979,15 +5144,27 @@ async function registerSessionDisconnectHandlers() {
   const seatRef = db.ref(`seats/${currentUser.code}`);
   const leaseRef = db.ref(`seatLeases/${currentUser.code}`);
   const onlineRef = db.ref(`onlineUsers/${currentUser.id}`);
+  const courseLockRef = db.ref(COURSE_LOCK_PATH);
+  const courseLockPayload = currentUser.inCourse ? buildCourseLockPayload({
+    status: "offline",
+    exitPending: true,
+    disconnectRequestedAt: now,
+    exitLoggedAt: now,
+    leftAt: now,
+    updatedAt: now,
+    lastSeen: now,
+    heartbeatAt: now
+  }) : null;
 
   SESSION_LIFECYCLE_V2.sessionRef = sessionRef;
-  SESSION_LIFECYCLE_V2.mirrorRefs = [seatRef, leaseRef, onlineRef];
+  SESSION_LIFECYCLE_V2.mirrorRefs = [seatRef, leaseRef, onlineRef, courseLockRef];
 
   await Promise.all([
     sessionRef.onDisconnect().update(sessionPayload).catch(() => {}),
     seatRef.onDisconnect().update(tombstone).catch(() => {}),
     leaseRef.onDisconnect().update(tombstone).catch(() => {}),
-    onlineRef.onDisconnect().update(tombstone).catch(() => {})
+    onlineRef.onDisconnect().update(tombstone).catch(() => {}),
+    courseLockPayload ? courseLockRef.onDisconnect().update(courseLockPayload).catch(() => {}) : Promise.resolve()
   ]).catch(() => {});
 }
 
@@ -5004,12 +5181,23 @@ async function syncBrowserVisibilityState() {
     updatedAt: now
   };
 
-  await Promise.all([
+  const writes = [
     db.ref(`sessions/${currentSessionToken}`).update(payload).catch(() => {}),
     db.ref(`seatLeases/${currentUser.code}`).update(payload).catch(() => {}),
     db.ref(`seats/${currentUser.code}`).update(payload).catch(() => {}),
     db.ref(`onlineUsers/${currentUser.id}`).update(payload).catch(() => {})
-  ]).catch(() => {});
+  ];
+  if (currentUser.inCourse) {
+    const courseLockPayload = buildCourseLockPayload({
+      visibilityState: getCurrentVisibilityState(),
+      lastSeen: now,
+      heartbeatAt: now,
+      updatedAt: now
+    });
+    if (courseLockPayload) writes.push(db.ref(COURSE_LOCK_PATH).update(courseLockPayload).catch(() => {}));
+  }
+
+  await Promise.all(writes).catch(() => {});
 }
 
 function stopSessionHeartbeat() {
@@ -5043,12 +5231,17 @@ function startSessionHeartbeat() {
       return;
     }
     const payload = buildPresencePayload({ updatedAt: now });
-    await Promise.all([
+    const writes = [
       db.ref(`sessions/${currentSessionToken}`).update(payload).catch(() => {}),
       db.ref(`seatLeases/${currentUser.code}`).update(payload).catch(() => {}),
       db.ref(`seats/${currentUser.code}`).update(payload).catch(() => {}),
       db.ref(`onlineUsers/${currentUser.id}`).update(payload).catch(() => {})
-    ]).catch(() => {});
+    ];
+    if (currentUser.inCourse) {
+      const courseLockPayload = buildCourseLockPayload({ updatedAt: now, lastSeen: now, heartbeatAt: now });
+      if (courseLockPayload) writes.push(db.ref(COURSE_LOCK_PATH).update(courseLockPayload).catch(() => {}));
+    }
+    await Promise.all(writes).catch(() => {});
   };
 
   SESSION_LIFECYCLE_V2.heartBeatHandle = setInterval(() => {
@@ -5162,13 +5355,6 @@ async function sweepStaleSessions() {
       ]);
     }
 
-    if (
-      Object.values(seats).filter(isPresenceFresh).length === 0 &&
-      Object.values(onlineUsers).filter(isPresenceFresh).length === 0 &&
-      Object.values(seatLeases).filter(isPresenceFresh).length === 0
-    ) {
-      await forceOfflineZeroOnlineUsers();
-    }
 
     return staleSessions.length > 0;
   } catch (_) {
@@ -5181,7 +5367,7 @@ function startStaleSessionMonitor() {
   SESSION_LIFECYCLE_V2.staleHandle = setInterval(() => {
     if (currentUser) {
       const joinedAt = Number(currentUser.roomJoinedAt || currentUser.joinedAt || currentUser.start || 0) || 0;
-      if (joinedAt && (Date.now() - joinedAt) < 5000) return;
+      if (joinedAt && (Date.now() - joinedAt) < RECENT_JOIN_GRACE_MS) return;
     }
     sweepStaleSessions().catch(() => {});
   }, ATTENDANCE_REFRESH_INTERVAL_MS);
@@ -5194,7 +5380,7 @@ function scheduleImmediateStaleSessionSweep() {
     // do not erase a session that has not finished syncing yet.
     if (currentUser && !isSessionTeardownInProgress) {
       const joinedAt = Number(currentUser.roomJoinedAt || currentUser.joinedAt || currentUser.start || 0) || 0;
-      if (joinedAt && (Date.now() - joinedAt) < 5000) {
+      if (joinedAt && (Date.now() - joinedAt) < RECENT_JOIN_GRACE_MS) {
         immediateStaleSweepTimeout = null;
         return;
       }
@@ -5215,7 +5401,7 @@ function bindVisibilityPresenceSync() {
 
   const maybeLeave = () => {
     if (!currentUser || isSessionTeardownInProgress) return;
-    cleanupSession("network_lost", { scope: "session", source: "offline-event" }).catch(() => {});
+    syncBrowserVisibilityState().catch(() => {});
   };
 
   document.addEventListener("visibilitychange", sync, { capture: true });
@@ -5229,10 +5415,9 @@ function bindUnloadPresenceCleanup() {
   if (document.__studyRoomUnloadSyncBoundV2) return;
   document.__studyRoomUnloadSyncBoundV2 = true;
 
-  const handleShutdown = (event) => {
+  const handleShutdown = () => {
     if (!currentUser || isSessionTeardownInProgress) return;
-    const reason = event && event.type === "pagehide" ? "browser_closed" : "refresh";
-    cleanupSession(reason, { scope: "session", source: event?.type || "unload" }).catch(() => {});
+    syncBrowserVisibilityState().catch(() => {});
   };
 
   window.addEventListener("pagehide", handleShutdown, { capture: true });
@@ -5248,44 +5433,58 @@ function attachSessionWatchers() {
   const seatRef = db.ref(`seats/${currentUser.code}`);
   const leaseRef = db.ref(`seatLeases/${currentUser.code}`);
   const onlineRef = db.ref(`onlineUsers/${currentUser.id}`);
+  const courseLockRef = db.ref(COURSE_LOCK_PATH);
   SESSION_LIFECYCLE_V2.sessionRef = sessionRef;
-  SESSION_LIFECYCLE_V2.mirrorRefs = [seatRef, leaseRef, onlineRef];
+  SESSION_LIFECYCLE_V2.mirrorRefs = [seatRef, leaseRef, onlineRef, courseLockRef];
 
-  const createWatcher = (ref, label) => {
+  const isTransientJoinWindow = (record = null) => {
+    const joinedAt = Number(currentUser?.roomJoinedAt || currentUser?.joinedAt || currentUser?.start || 0) || 0;
+    if (joinedAt && (Date.now() - joinedAt) < RECENT_JOIN_GRACE_MS) return true;
+    if (record && isPresenceFresh(record)) return true;
+    return isTransientSessionLoss(record);
+  };
+
+  const createWatcher = (ref, label, { cleanupOnMissing = false } = {}) => {
     const handler = (snap) => {
       if (!currentUser || isSessionTeardownInProgress) return;
       const record = snap.val();
+      const token = String(record?.sessionToken || "");
+      const status = String(record?.status || "").toLowerCase();
+
       if (!record) {
-        cleanupSession(label, { scope: "session", source: "watcher" }).catch(() => {});
+        if (cleanupOnMissing && !isTransientJoinWindow()) {
+          cleanupSession(label, { scope: "session", source: "watcher-missing" }).catch(() => {});
+        }
         return;
       }
 
-      const token = String(record.sessionToken || "");
-      const status = String(record.status || "").toLowerCase();
       if (token && token !== currentSessionToken) {
-        cleanupSession(label, { scope: "session", source: "token-mismatch" }).catch(() => {});
+        if (!isTransientJoinWindow(record)) {
+          cleanupSession(label, { scope: "session", source: "token-mismatch" }).catch(() => {});
+        }
         return;
       }
+
       if (status === "offline" || record.leftAt || record.exitLoggedAt || record.disconnectRequestedAt) {
-        cleanupSession(record.exitReason || label, { scope: "session", source: "watcher-offline" }).catch(() => {});
+        if (!isTransientJoinWindow(record)) {
+          cleanupSession(record.exitReason || label, { scope: "session", source: "watcher-offline" }).catch(() => {});
+        }
       }
     };
     ref.on("value", handler);
     SESSION_LIFECYCLE_V2.watcherRefs.push({ ref, handler });
   };
 
-  createWatcher(sessionRef, "stale_session");
+  createWatcher(sessionRef, "stale_session", { cleanupOnMissing: true });
   createWatcher(seatRef, "room_leave");
   createWatcher(leaseRef, "room_leave");
   createWatcher(onlineRef, "room_leave");
+  createWatcher(courseLockRef, "course_leave");
 
   SESSION_LIFECYCLE_V2.connectedRef = db.ref(".info/connected");
   SESSION_LIFECYCLE_V2.connectedRef.on("value", (snap) => {
     if (!currentUser || isSessionTeardownInProgress) return;
-    const connected = !!snap.val();
-    if (!connected) {
-      cleanupSession("connection_lost", { scope: "session", source: "info-connected" }).catch(() => {});
-    } else {
+    if (snap.val()) {
       syncBrowserVisibilityState().catch(() => {});
     }
   });
@@ -5294,7 +5493,7 @@ function attachSessionWatchers() {
 function stopTimer() {
   clearInterval(timerInterval);
   clearTimeout(autoRemovalTimeoutInstance);
-  timerBox.innerText = "0m 0s";
+  timerBox.innerText = formatElapsedDuration(0);
   personalWeeklyBox.classList.add("hidden");
 }
 
@@ -5480,6 +5679,8 @@ async function cleanupSession(reason = "manual_leave", options = {}) {
 
       updateCourseActionButton();
       syncBrowserTitle();
+      await db.ref(COURSE_LOCK_PATH).remove().catch(() => {});
+      currentCourseLockSnapshot = null;
       isSessionTeardownInProgress = false;
       SESSION_LIFECYCLE_V2.cleanupPromise = null;
       return true;
@@ -5488,8 +5689,10 @@ async function cleanupSession(reason = "manual_leave", options = {}) {
     await Promise.all([
       db.ref(`seatLeases/${snapshot.code}`).remove().catch(() => {}),
       db.ref(`seats/${snapshot.code}`).remove().catch(() => {}),
-      db.ref(`onlineUsers/${snapshot.id}`).remove().catch(() => {})
+      db.ref(`onlineUsers/${snapshot.id}`).remove().catch(() => {}),
+      db.ref(COURSE_LOCK_PATH).remove().catch(() => {})
     ]);
+    currentCourseLockSnapshot = null;
 
     await cancelSessionDisconnectHandlers(snapshot.code, snapshot.id).catch(() => {});
 
@@ -5518,6 +5721,18 @@ async function cleanupSession(reason = "manual_leave", options = {}) {
     }
 
     if (options.silent !== true) {
+      const neutralReasons = new Set([
+        "refresh",
+        "browser_closed",
+        "tab_closed",
+        "network_lost",
+        "connection_lost",
+        "lease-lost",
+        "removed",
+        "force-kicked",
+        "force_offline_zero_online",
+        "zero-online-guardian"
+      ]);
       toast(
         normalizedReason === "session_expired"
           ? "Session expired and was cleaned up."
@@ -5525,7 +5740,9 @@ async function cleanupSession(reason = "manual_leave", options = {}) {
             ? "Stale session cleaned up."
             : normalizedReason === "admin_kicked"
               ? "Session ended by admin."
-              : "Workspace link destroyed successfully.",
+              : neutralReasons.has(normalizedReason)
+                ? "Session ended."
+                : "You left the workspace successfully.",
         "info"
       );
     }
@@ -5554,8 +5771,19 @@ async function joinRoom(name, code, pin) {
     return false;
   }
 
-  if (currentUser || currentSessionToken) {
-    await cleanupSession("refresh", { scope: "session", silent: true }).catch(() => {});
+  if (currentUser) {
+    const sameSeat = normalizeSeatCode(currentUser.code || currentUser.seat || "") === normalizedCode;
+    if (sameSeat && isCurrentSessionFreshPresence()) {
+      await refreshAllPresenceHeartbeats().catch(() => {});
+      updateCourseActionButton();
+      syncBrowserTitle();
+      return true;
+    }
+
+    if (!sameSeat) {
+      toast("You are already joined in another room. Leave it first before joining a new one.", "warning");
+      return false;
+    }
   }
 
   const blockSnap = await db.ref(`blockedSeats/${normalizedCode}`).get();
@@ -5579,22 +5807,19 @@ async function joinRoom(name, code, pin) {
   }
 
   const seatRef = db.ref(`seats/${normalizedCode}`);
-  const existingSnap = await seatRef.get();
-  if (existingSnap.exists() && isPresenceFresh(existingSnap.val())) {
-    toast("Resource collision: Seat node is already occupied.", "error");
-    return false;
-  }
-
   const leaseRef = db.ref(`seatLeases/${normalizedCode}`);
-  const leaseSnap = await leaseRef.get();
-  if (leaseSnap.exists() && isPresenceFresh(leaseSnap.val())) {
-    toast("Resource collision: Seat node is already leased by another active session.", "error");
-    return false;
-  }
+  const sameClaimOwner = (record = null) => {
+    if (!record) return false;
+    return String(record.sessionToken || "") === String(sessionToken || "")
+      && String(record.deviceId || "") === String(currentDeviceId || "")
+      && String(record.tabId || "") === String(currentTabId || "")
+      && String(record.instanceId || "") === String(currentSessionInstanceId || "");
+  };
 
   const userId = createStableId("u");
-  const sessionToken = createStableId("sess");
+  const sessionToken = currentSessionToken && currentUser ? currentSessionToken : createStableId("sess");
   const now = Date.now();
+  currentSessionInstanceId = createStableId("instance");
   resetAttendanceEventWriteCache();
   sessionStorage.setItem("active_session_token", sessionToken);
   localStorage.setItem("active_session_token", sessionToken);
@@ -5618,6 +5843,7 @@ async function joinRoom(name, code, pin) {
     leftAt: 0,
     deviceId: currentDeviceId,
     tabId: currentTabId,
+    instanceId: currentSessionInstanceId,
     sessionToken,
     handRaised: false,
     handRaisedAt: 0
@@ -5635,6 +5861,7 @@ async function joinRoom(name, code, pin) {
     ownerId: userId,
     seat: normalizedCode,
     code: normalizedCode,
+    instanceId: currentSessionInstanceId,
     sessionToken,
     status: "active",
     exitPending: false,
@@ -5642,6 +5869,75 @@ async function joinRoom(name, code, pin) {
     disconnectRequestedAt: 0,
     leftAt: 0
   });
+
+  const leaseTxn = await leaseRef.transaction((current) => {
+    if (current && isLeaseFresh(current) && !sameClaimOwner(current)) {
+      return;
+    }
+    return {
+      ...presencePayload,
+      seat: normalizedCode,
+      code: normalizedCode,
+      ownerId: userId,
+      id: userId,
+      sessionToken,
+      deviceId: currentDeviceId,
+      tabId: currentTabId,
+      status: "active",
+      inCourse: false,
+      activeCourseName: "",
+      courseEnteredAt: 0,
+      exitPending: false,
+      exitLoggedAt: 0,
+      disconnectRequestedAt: 0,
+      leftAt: 0,
+      updatedAt: now
+    };
+  }).catch(() => null);
+
+  if (!leaseTxn || leaseTxn.committed === false) {
+    toast("Resource collision: Seat node is already leased by another active session.", "error");
+    currentUser = null;
+    currentSessionToken = "";
+    sessionStorage.removeItem("active_session_token");
+    localStorage.removeItem("active_session_token");
+    return false;
+  }
+
+  const seatTxn = await seatRef.transaction((current) => {
+    if (current && isPresenceFresh(current) && !sameClaimOwner(current)) {
+      return;
+    }
+    return {
+      ...presencePayload,
+      seat: normalizedCode,
+      code: normalizedCode,
+      ownerId: userId,
+      id: userId,
+      sessionToken,
+      deviceId: currentDeviceId,
+      tabId: currentTabId,
+      status: "active",
+      inCourse: false,
+      activeCourseName: "",
+      courseEnteredAt: 0,
+      exitPending: false,
+      exitLoggedAt: 0,
+      disconnectRequestedAt: 0,
+      leftAt: 0,
+      updatedAt: now
+    };
+  }).catch(() => null);
+
+  if (!seatTxn || seatTxn.committed === false) {
+    await leaseRef.remove().catch(() => {});
+    toast("Resource collision: Seat node is already occupied.", "error");
+    currentUser = null;
+    currentSessionToken = "";
+    sessionStorage.removeItem("active_session_token");
+    localStorage.removeItem("active_session_token");
+    return false;
+  }
 
   await Promise.all([
     db.ref(`sessions/${sessionToken}`).set({
@@ -5651,13 +5947,6 @@ async function joinRoom(name, code, pin) {
       status: "active",
       inCourse: false,
       activeCourseName: ""
-    }),
-    db.ref(`seats/${normalizedCode}`).set(presencePayload),
-    db.ref(`seatLeases/${normalizedCode}`).set({
-      ...presencePayload,
-      seat: normalizedCode,
-      ownerId: userId,
-      code: normalizedCode
     }),
     db.ref(`onlineUsers/${userId}`).set(presencePayload)
   ]);
@@ -5712,17 +6001,23 @@ function listenToActiveKicks(userId) {
   db.ref(`onlineUsers/${userId}`).on("value", (snap) => {
     if (!currentUser || isSessionTeardownInProgress) return;
     const record = snap.val();
+    const token = String(record?.sessionToken || "");
+    const status = String(record?.status || "").toLowerCase();
+
     if (!record) {
-      cleanupSession("admin_kicked", { scope: "session", source: "onlineUsers-null" }).catch(() => {});
+      if (!isTransientSessionLoss()) {
+        cleanupSession("admin_kicked", { scope: "session", source: "onlineUsers-null" }).catch(() => {});
+      }
       return;
     }
-    const status = String(record.status || "").toLowerCase();
-    const token = String(record.sessionToken || "");
+
     if (token && token !== currentSessionToken) {
-      cleanupSession("admin_kicked", { scope: "session", source: "onlineUsers-token-mismatch" }).catch(() => {});
+      if (!isTransientSessionLoss(record)) {
+        cleanupSession("admin_kicked", { scope: "session", source: "onlineUsers-token-mismatch" }).catch(() => {});
+      }
       return;
     }
-    if (status === "offline" || record.exitPending || record.disconnectRequestedAt || record.leftAt) {
+    if ((status === "offline" || record.exitPending || record.disconnectRequestedAt || record.leftAt) && !isTransientSessionLoss(record)) {
       cleanupSession(record.exitReason || "admin_kicked", { scope: "session", source: "onlineUsers-offline" }).catch(() => {});
     }
   });
@@ -5733,17 +6028,23 @@ function listenToSeatLease(code) {
   db.ref(`seatLeases/${normalizedCode}`).on("value", (snap) => {
     if (!currentUser || isSessionTeardownInProgress) return;
     const record = snap.val();
+    const token = String(record?.sessionToken || "");
+    const status = String(record?.status || "").toLowerCase();
+
     if (!record) {
-      cleanupSession("room_leave", { scope: "session", source: "seatLeases-null" }).catch(() => {});
+      if (!isTransientSessionLoss()) {
+        cleanupSession("room_leave", { scope: "session", source: "seatLeases-null" }).catch(() => {});
+      }
       return;
     }
-    const status = String(record.status || "").toLowerCase();
-    const token = String(record.sessionToken || "");
+
     if (token && token !== currentSessionToken) {
-      cleanupSession("force_kicked", { scope: "session", source: "seatLeases-token-mismatch" }).catch(() => {});
+      if (!isTransientSessionLoss(record)) {
+        cleanupSession("force_kicked", { scope: "session", source: "seatLeases-token-mismatch" }).catch(() => {});
+      }
       return;
     }
-    if (status === "offline" || record.exitPending || record.disconnectRequestedAt || record.leftAt) {
+    if ((status === "offline" || record.exitPending || record.disconnectRequestedAt || record.leftAt) && !isTransientSessionLoss(record)) {
       cleanupSession(record.exitReason || "force_kicked", { scope: "session", source: "seatLeases-offline" }).catch(() => {});
     }
   });
@@ -5751,7 +6052,7 @@ function listenToSeatLease(code) {
 
 async function handlePageExit() {
   if (!currentUser) return;
-  await cleanupSession("browser_closed", { scope: "session", source: "handlePageExit", silent: true }).catch(() => {});
+  await syncBrowserVisibilityState().catch(() => {});
 }
 
 function handleCourseActionButtonClick() {
@@ -5789,13 +6090,6 @@ async function refreshAttendanceViews(options = {}) {
     } catch (_) {}
   })();
 
-  try {
-    const seatsSnap = await db.ref("seats").get();
-    const freshSeats = Object.values(seatsSnap.val() || {}).filter((u) => isPresenceFresh(u));
-    if (freshSeats.length === 0 && !isCurrentSessionFreshPresence()) {
-      await forceOfflineZeroOnlineUsers();
-    }
-  } catch (_) {}
 
   return result;
 }
