@@ -676,6 +676,15 @@ body {
     transform: translateX(4px);
     box-shadow: var(--shadow-lg);
   }
+
+  .enter-course-btn.leave-course-mode {
+    background: #dc2626;
+    color: #ffffff;
+  }
+
+  .enter-course-btn.leave-course-mode:hover {
+    background: #b91c1c;
+  }
   
   /* ==========================================================================
      DASHBOARD GRID PANELS
