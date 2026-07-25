@@ -630,6 +630,7 @@ function getSessionRoomStartTimestamp(session = {}, fallback = Date.now()) {
 }
 
 function getSessionCourseStartTimestamp(session = {}, fallback = null) {
+  const roomStart = getSessionRoomStartTimestamp(session, fallback ?? Date.now());
   const candidates = [
     session?.courseEnteredAt,
     session?.courseJoinedAt,
@@ -638,9 +639,9 @@ function getSessionCourseStartTimestamp(session = {}, fallback = null) {
   ];
   for (const candidate of candidates) {
     const value = Number(candidate);
-    if (Number.isFinite(value) && value > 0) return value;
+    if (Number.isFinite(value) && value > 0) return Math.max(roomStart, value);
   }
-  return getSessionRoomStartTimestamp(session, fallback ?? Date.now());
+  return roomStart;
 }
 
 function getSessionExpiryTimestamp(session = {}, fallback = Date.now()) {
@@ -654,7 +655,9 @@ function getElapsedSessionMsFromUser(session = {}, now = Date.now()) {
 }
 
 function getElapsedCourseMsFromUser(session = {}, now = Date.now()) {
-  return Math.max(0, now - getSessionCourseStartTimestamp(session, now));
+  const roomElapsed = Math.max(0, now - getSessionRoomStartTimestamp(session, now));
+  const courseElapsed = Math.max(0, now - getSessionCourseStartTimestamp(session, now));
+  return Math.min(roomElapsed, courseElapsed);
 }
 
 function getRangeBounds(range) {
@@ -745,7 +748,7 @@ function buildPresencePayload(extra = {}) {
     joinedAt,
     roomJoinedAt: joinedAt,
     start: joinedAt,
-    courseEnteredAt: currentUser.courseEnteredAt || courseStartedAt,
+    courseEnteredAt: courseStartedAt,
     lastSeen: now,
     heartbeatAt: now,
     leftAt: 0,
@@ -1221,8 +1224,9 @@ async function closeStalePresenceSession(seatData, leaseData = null, options = {
     return false;
   }
 
-  const courseDuration = Math.max(0, Math.min(SESSION_LIMIT, closureTime - courseEnteredAt));
+  const rawCourseDuration = Math.max(0, Math.min(SESSION_LIMIT, closureTime - courseEnteredAt));
   const roomDuration = Math.max(0, Math.min(SESSION_LIMIT, closureTime - roomJoinedAt));
+  const courseDuration = Math.min(roomDuration, rawCourseDuration);
   const finalAction = getFinalExitAttendanceAction({ wasInCourse, wasHandRaised });
   const offlineStamp = buildOfflineExitStamp({
     roomJoinedAt,
@@ -1322,7 +1326,7 @@ async function refreshAllPresenceHeartbeats() {
       sessionToken: currentSessionToken,
       inCourse: !!currentUser.inCourse,
       activeCourseName: currentUser.activeCourseName || "",
-      courseEnteredAt: currentUser.courseEnteredAt || 0,
+      courseEnteredAt: getSessionCourseStartTimestamp(currentUser, now),
       start: getSessionRoomStartTimestamp(currentUser, now),
       joinedAt: getSessionRoomStartTimestamp(currentUser, now),
       roomJoinedAt: getSessionRoomStartTimestamp(currentUser, now),
@@ -1523,7 +1527,12 @@ async function leaveCourse(auto = false, reason = "manual-course-leave", opts = 
 async function finalizeActiveCourseSession(reason = "leave", startOverride = null, endOverride = null) {
   if (!currentUser) return false;
   const endTime = Number.isFinite(endOverride) && endOverride > 0 ? endOverride : Date.now();
-  const startTime = getSessionCourseStartTimestamp({ courseEnteredAt: startOverride || currentUser.courseEnteredAt, start: startOverride || currentUser.courseEnteredAt }, endTime);
+  const courseStartCandidate = Number.isFinite(startOverride) && startOverride > 0 ? startOverride : currentUser.courseEnteredAt;
+  const startTime = getSessionCourseStartTimestamp({
+    courseEnteredAt: courseStartCandidate,
+    start: courseStartCandidate,
+    roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || courseStartCandidate
+  }, endTime);
   return finalizeCourseSessionsForPresence({
     code: currentUser.code,
     sessionToken: currentSessionToken,
@@ -2539,10 +2548,22 @@ function scheduleImmediateStaleSessionSweep(force = false) {
   immediateStaleSweepForce = immediateStaleSweepForce || !!force;
   immediateStaleSweepTimeout = setTimeout(() => {
     const shouldForce = immediateStaleSweepForce;
+
+    // Do not sweep a session that has just joined; wait until the fresh
+    // join/heartbeat writes have propagated.
+    if (currentUser && !isSessionTeardownInProgress) {
+      const joinedAt = Number(currentUser.roomJoinedAt || currentUser.joinedAt || currentUser.start || 0) || 0;
+      if (joinedAt && (Date.now() - joinedAt) < 5000) {
+        immediateStaleSweepTimeout = null;
+        immediateStaleSweepForce = false;
+        return;
+      }
+    }
+
     immediateStaleSweepTimeout = null;
     immediateStaleSweepForce = false;
     sweepStaleSessions({ force: shouldForce }).catch(() => {});
-  }, 0);
+  }, 500);
 }
 
 async function sweepStaleSessions(options = {}) {
@@ -2590,6 +2611,10 @@ async function forceOfflineZeroOnlineUsers() {
 function startStaleSessionMonitor() {
   if (staleSessionMonitorInterval) clearInterval(staleSessionMonitorInterval);
   const runMonitorTick = () => {
+    if (currentUser) {
+      const joinedAt = Number(currentUser.roomJoinedAt || currentUser.joinedAt || currentUser.start || 0) || 0;
+      if (joinedAt && (Date.now() - joinedAt) < 5000) return;
+    }
     sweepStaleSessions().catch(() => {});
     forceOfflineZeroOnlineUsers().catch(() => {});
   };
@@ -3110,7 +3135,7 @@ async function openCourseEmbedWindow() {
       sessionToken: currentSessionToken,
       inCourse: true,
       activeCourseName: currentUser.activeCourseName,
-      courseEnteredAt: currentUser.courseEnteredAt,
+      courseEnteredAt: getSessionCourseStartTimestamp(currentUser, now),
       start: currentUser.start,
       lastSeen: Date.now(),
       heartbeatAt: Date.now()
@@ -3147,7 +3172,7 @@ async function openCourseEmbedWindow() {
     inCourse: true,
     activeCourseName: currentUser.activeCourseName,
     roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || 0,
-    courseEnteredAt: currentUser.courseEnteredAt,
+    courseEnteredAt: getSessionCourseStartTimestamp(currentUser, now),
     lastSeen: currentUser.lastSeen,
     heartbeatAt: currentUser.heartbeatAt
   });
@@ -3156,7 +3181,7 @@ async function openCourseEmbedWindow() {
     inCourse: true,
     activeCourseName: currentUser.activeCourseName,
     roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || 0,
-    courseEnteredAt: currentUser.courseEnteredAt,
+    courseEnteredAt: getSessionCourseStartTimestamp(currentUser, now),
     lastSeen: currentUser.lastSeen,
     heartbeatAt: currentUser.heartbeatAt
   });
@@ -3793,7 +3818,9 @@ function initRealtimeDatabaseListeners() {
       onlineCount.classList.toggle("counter-offline", onlineCountValue === 0);
     }
 
-    if (onlineCountValue === 0) {
+    // Avoid forcing a stale sweep during the first moments after a fresh join.
+    // A temporary zero-count snapshot can happen before presence propagates.
+    if (onlineCountValue === 0 && !currentUser && !isSessionTeardownInProgress) {
       scheduleImmediateStaleSessionSweep(true);
     }
 
@@ -5103,6 +5130,10 @@ async function sweepStaleSessions() {
 function startStaleSessionMonitor() {
   clearInterval(SESSION_LIFECYCLE_V2.staleHandle);
   SESSION_LIFECYCLE_V2.staleHandle = setInterval(() => {
+    if (currentUser) {
+      const joinedAt = Number(currentUser.roomJoinedAt || currentUser.joinedAt || currentUser.start || 0) || 0;
+      if (joinedAt && (Date.now() - joinedAt) < 5000) return;
+    }
     sweepStaleSessions().catch(() => {});
   }, ATTENDANCE_REFRESH_INTERVAL_MS);
 }
@@ -5110,6 +5141,16 @@ function startStaleSessionMonitor() {
 function scheduleImmediateStaleSessionSweep() {
   if (immediateStaleSweepTimeout) clearTimeout(immediateStaleSweepTimeout);
   immediateStaleSweepTimeout = setTimeout(() => {
+    // Skip stale sweeping for a moment right after a successful join so we
+    // do not erase a session that has not finished syncing yet.
+    if (currentUser && !isSessionTeardownInProgress) {
+      const joinedAt = Number(currentUser.roomJoinedAt || currentUser.joinedAt || currentUser.start || 0) || 0;
+      if (joinedAt && (Date.now() - joinedAt) < 5000) {
+        immediateStaleSweepTimeout = null;
+        return;
+      }
+    }
+
     sweepStaleSessions().catch(() => {});
   }, 200);
 }
@@ -5213,7 +5254,8 @@ async function recordSessionDurations(snapshot, reason, scope, leaveTime) {
   const roomJoinedAt = getSessionRoomStartTimestamp(snapshot, leaveTime);
   const courseEnteredAt = getSessionCourseStartTimestamp(snapshot, roomJoinedAt);
   const sessionDuration = Math.max(0, Math.min(SESSION_LIMIT, leaveTime - roomJoinedAt));
-  const courseDuration = Math.max(0, Math.min(SESSION_LIMIT, leaveTime - courseEnteredAt));
+  const rawCourseDuration = Math.max(0, Math.min(SESSION_LIMIT, leaveTime - courseEnteredAt));
+  const courseDuration = Math.min(sessionDuration, rawCourseDuration);
   const weekKey = getWeekIdentifier();
   const todayKey = getTodayIdentifier();
   const monthKey = getMonthIdentifier();
@@ -5259,7 +5301,8 @@ async function cleanupSession(reason = "manual_leave", options = {}) {
     const roomJoinedAt = getSessionRoomStartTimestamp(snapshot, leaveTime);
     const courseEnteredAt = getSessionCourseStartTimestamp(snapshot, roomJoinedAt);
     const sessionDuration = Math.max(0, Math.min(SESSION_LIMIT, leaveTime - roomJoinedAt));
-    const courseDuration = Math.max(0, Math.min(SESSION_LIMIT, leaveTime - courseEnteredAt));
+    const rawCourseDuration = Math.max(0, Math.min(SESSION_LIMIT, leaveTime - courseEnteredAt));
+    const courseDuration = Math.min(sessionDuration, rawCourseDuration);
     const courseName = snapshot.activeCourseName || "Full Stack AI Engineer";
 
     const resumeEligibleReasons = new Set(["refresh", "browser_closed", "tab_closed"]);
