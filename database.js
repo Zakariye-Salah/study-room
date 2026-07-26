@@ -3748,26 +3748,23 @@ window.openQuickMessagingModal = async function(targetUserId, targetSeatCode, mo
     toast("You must claim a space seat to interact.", "error");
     return;
   }
-  
+
   activeMessageTargetUser = { id: targetUserId, seat: targetSeatCode };
   activeMessageMode = mode === 'global' ? 'global' : 'private';
-  
-  const todayId = getTodayIdentifier();
-  const budgetSnap = await db.ref(`messageBudgets/${todayId}/${currentUser.id}`).get();
-  const currentUsed = budgetSnap.val() || 0;
-  const remaining = Math.max(0, 3 - currentUsed);
+  selectedQuickMessageText = '';
 
-  lblRemainingMsgBudgetCounter.innerText = remaining;
-  selectedQuickMessageText = "";
-  
   const modalTitleEl = quickStudentMessageModal ? quickStudentMessageModal.querySelector(".modal-header h3") : null;
   const submitBtn = btnSubmitQuickStudentMessage;
+
+  if (quickStudentMessageModal) {
+    quickStudentMessageModal.classList.remove("hidden");
+  }
 
   if (activeMessageMode === 'global') {
     if (modalTitleEl) modalTitleEl.innerHTML = '<i class="bi bi-megaphone-fill text-primary"></i> Send Global Alert';
     if (submitBtn) submitBtn.innerText = 'Send Global Alert';
     if (quickMessageRecipientLabel) {
-      quickMessageRecipientLabel.innerHTML = `Global status alert for all users`;
+      quickMessageRecipientLabel.innerHTML = 'Global status alert for all users';
     }
   } else {
     if (modalTitleEl) modalTitleEl.innerHTML = '<i class="bi bi-chat-dots-fill text-primary"></i> Send Private Message';
@@ -3776,10 +3773,21 @@ window.openQuickMessagingModal = async function(targetUserId, targetSeatCode, mo
       quickMessageRecipientLabel.innerHTML = `Private message to Seat <strong>${escapeHtml(targetSeatCode || '--')}</strong>`;
     }
   }
-  
+
   document.querySelectorAll(".template-msg-pill").forEach(p => p.style.border = "1px solid var(--border-color)");
-  
-  quickStudentMessageModal.classList.remove("hidden");
+
+  try {
+    const todayId = getTodayIdentifier();
+    const budgetSnap = await db.ref(`messageBudgets/${todayId}/${currentUser.id}`).get();
+    const currentUsed = budgetSnap.val() || 0;
+    if (lblRemainingMsgBudgetCounter) {
+      lblRemainingMsgBudgetCounter.innerText = String(Math.max(0, 3 - currentUsed));
+    }
+  } catch (_) {
+    if (lblRemainingMsgBudgetCounter) {
+      lblRemainingMsgBudgetCounter.innerText = "3";
+    }
+  }
 };
 
 function closeQuickMessagingModalWindow() {
@@ -5808,6 +5816,20 @@ async function joinRoom(name, code, pin) {
 
   const seatRef = db.ref(`seats/${normalizedCode}`);
   const leaseRef = db.ref(`seatLeases/${normalizedCode}`);
+
+  const onlineUsersSnap = await db.ref("onlineUsers").get().catch(() => null);
+  if (onlineUsersSnap && onlineUsersSnap.exists()) {
+    const occupiedByOtherUser = Object.values(onlineUsersSnap.val() || {}).some((user) => {
+      if (!user) return false;
+      if (!isPresenceFresh(user)) return false;
+      return normalizeSeatCode(user.code || user.seat || "") === normalizedCode;
+    });
+    if (occupiedByOtherUser) {
+      toast("This seat is already taken by another user. Please choose another seat.", "danger");
+      return false;
+    }
+  }
+
   const sameClaimOwner = (record = null) => {
     if (!record) return false;
     return String(record.sessionToken || "") === String(sessionToken || "")
@@ -5817,7 +5839,7 @@ async function joinRoom(name, code, pin) {
   };
 
   const userId = createStableId("u");
-  const sessionToken = currentSessionToken && currentUser ? currentSessionToken : createStableId("sess");
+  const sessionToken = currentSessionToken || createStableId("sess");
   const now = Date.now();
   currentSessionInstanceId = createStableId("instance");
   resetAttendanceEventWriteCache();
@@ -5991,8 +6013,26 @@ async function leaveRoom(auto = false, reason = "manual_leave") {
 }
 
 async function leaveCourse(auto = false, reason = "course_leave", opts = {}) {
+  const { skipConfirm = false } = opts;
   if (!currentUser) return false;
-  const exitReason = auto ? normalizeOfflineExitReason(reason || "auto_leave") : normalizeOfflineExitReason(reason || "course_leave");
+
+  if (!auto && !skipConfirm) {
+    return new Promise((resolve) => {
+      openConfirmationModal(
+        "Leave Course",
+        "Are you sure you want to leave this course?",
+        async () => {
+          const result = await leaveCourse(false, reason, { ...opts, skipConfirm: true });
+          resolve(result);
+        },
+        () => resolve(false)
+      );
+    });
+  }
+
+  const exitReason = auto
+    ? normalizeOfflineExitReason(reason || "auto_leave")
+    : normalizeOfflineExitReason(reason || "course_leave");
   return cleanupSession(exitReason, { scope: "course", auto: !!auto, ...opts });
 }
 
