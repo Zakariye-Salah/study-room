@@ -219,7 +219,7 @@ let activeAttendanceReportRange = "today";
 let activeAttendanceReportUser = "all";
 let activeAttendanceReportLimit = 10;
 const ACTIVE_PRESENCE_GRACE_MS = 90000;
-const HIDDEN_PRESENCE_GRACE_MS = 15 * 60 * 1000;
+const HIDDEN_PRESENCE_GRACE_MS = ACTIVE_PRESENCE_GRACE_MS;
 const HEARTBEAT_INTERVAL_MS = 15000;
 const COURSE_SESSION_COLLECTION = "courseSessions";
 
@@ -653,6 +653,7 @@ function getElapsedSessionMsFromUser(session = {}, now = Date.now()) {
 }
 
 function getElapsedCourseMsFromUser(session = {}, now = Date.now()) {
+  if (!session || !session.inCourse) return 0;
   return Math.max(0, now - getSessionCourseStartTimestamp(session, now));
 }
 
@@ -689,7 +690,9 @@ function isTimestampInSelectedRange(timestamp, range) {
 
 function isPresenceFresh(user) {
   if (!user || !user.sessionToken) return false;
-  if (user.exitPending || user.disconnectRequestedAt || user.exitLoggedAt) return false;
+  const status = String(user.status || "").toLowerCase();
+  if (status === "offline" || status === "left" || status === "terminated") return false;
+  if (user.exitPending || user.disconnectRequestedAt || user.exitLoggedAt || user.leftAt) return false;
   const lastSeen = user.lastSeen || user.heartbeatAt || user.start || 0;
   const graceWindow = getPresenceGraceWindow(user);
   if ((Date.now() - lastSeen) > graceWindow) return false;
@@ -787,7 +790,8 @@ function getCurrentVisibilityState() {
 
 
 function getPresenceGraceWindow(user) {
-  return user && user.visibilityState === "hidden" ? HIDDEN_PRESENCE_GRACE_MS : ACTIVE_PRESENCE_GRACE_MS;
+  if (!user) return ACTIVE_PRESENCE_GRACE_MS;
+  return ACTIVE_PRESENCE_GRACE_MS;
 }
 
 function getMostRecentPresenceTimestamp(user = {}) {
@@ -1129,8 +1133,8 @@ async function closeStalePresenceSession(seatData, leaseData = null) {
 
   const closureTime = resolvePresenceClosureTimestamp(merged, Date.now());
   const roomJoinedAt = getSessionRoomStartTimestamp(merged, leaseData?.start || merged.start || closureTime);
-  const courseEnteredAt = getSessionCourseStartTimestamp(merged, roomJoinedAt);
   const wasInCourse = !!merged.inCourse;
+  const courseEnteredAt = wasInCourse ? getSessionCourseStartTimestamp(merged, roomJoinedAt) : 0;
   const wasHandRaised = !!merged.handRaised;
   const name = merged.name || leaseData?.name || getSeatDisplayName(code, "Unknown");
   const activeCourseName = merged.activeCourseName || leaseData?.activeCourseName || "Full Stack AI Engineer";
@@ -1142,8 +1146,8 @@ async function closeStalePresenceSession(seatData, leaseData = null) {
     return false;
   }
 
-  const courseDuration = Math.max(0, Math.min(SESSION_LIMIT, closureTime - courseEnteredAt));
   const roomDuration = Math.max(0, Math.min(SESSION_LIMIT, closureTime - roomJoinedAt));
+  const courseDuration = wasInCourse ? Math.max(0, Math.min(SESSION_LIMIT, closureTime - courseEnteredAt)) : 0;
   const finalStatus = "offline";
   const offlineStamp = {
     handRaised: false,
@@ -1240,7 +1244,9 @@ async function closeStalePresenceSession(seatData, leaseData = null) {
   }
 
   await db.ref(`weeklyHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + roomDuration).catch(() => {});
-  await db.ref(`weeklyCourseHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + courseDuration).catch(() => {});
+  if (wasInCourse) {
+    await db.ref(`weeklyCourseHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + courseDuration).catch(() => {});
+  }
   await db.ref(`dailyHours/${getTodayIdentifier()}/${code}`).transaction(v => (v || 0) + roomDuration).catch(() => {});
   await db.ref(`monthlyHours/${getMonthIdentifier()}/${code}`).transaction(v => (v || 0) + roomDuration).catch(() => {});
   await db.ref(`allTimeHours/${code}`).transaction(v => (v || 0) + roomDuration).catch(() => {});
@@ -1867,7 +1873,7 @@ function buildCourseSessions(events, presenceMap = {}, now = Date.now(), roomSes
       const roomEnd = roomEndMap.get(code) || 0;
 
       if (!end || end <= 0) {
-        if (isFresh && tokenMatches) {
+        if (isFresh && tokenMatches && String(presence.status || '').toLowerCase() !== 'offline') {
           status = 'active';
         } else {
           const presenceEnd = Number(
@@ -3124,12 +3130,12 @@ async function leaveRoom(auto = false, reason = "leave") {
     const id = currentUser.id;
     const name = currentUser.name;
     const roomJoinedAt = getSessionRoomStartTimestamp(currentUser);
-    const courseEnteredAt = getSessionCourseStartTimestamp(currentUser, roomJoinedAt);
     const leaveTime = Date.now();
     const sessionDuration = Math.min(SESSION_LIMIT, Math.max(0, leaveTime - roomJoinedAt));
-    const courseDuration = Math.min(sessionDuration, Math.max(0, leaveTime - courseEnteredAt));
     const liveToken = currentSessionToken;
     const wasInCourse = !!currentUser.inCourse;
+    const courseEnteredAt = wasInCourse ? getSessionCourseStartTimestamp(currentUser, roomJoinedAt) : 0;
+    const courseDuration = wasInCourse ? Math.min(sessionDuration, Math.max(0, leaveTime - courseEnteredAt)) : 0;
     const wasHandRaised = !!currentUser.handRaised;
     const activeCourseName = currentUser.activeCourseName || "Full Stack AI Engineer";
     const exitClaim = await claimSessionExitOnce(code, liveToken, auto ? "stale-session-sweep" : reason, leaveTime);
@@ -3206,7 +3212,9 @@ async function leaveRoom(auto = false, reason = "leave") {
     db.ref("seatLeases/" + code).off();
 
     await db.ref(`weeklyHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
-    await db.ref(`weeklyCourseHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + courseDuration);
+    if (wasInCourse) {
+      await db.ref(`weeklyCourseHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + courseDuration);
+    }
     await db.ref(`dailyHours/${getTodayIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
     await db.ref(`monthlyHours/${getMonthIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
     await db.ref(`allTimeHours/${code}`).transaction(v => (v || 0) + sessionDuration);
@@ -4224,7 +4232,12 @@ function buildAdminDashboardDeck() {
       const kickBtn = document.getElementById(`btn-kick-${code}`);
       if (!statusText) return;
 
-      if (active[code]) {
+      const seat = active[code] || {};
+      const seatStatus = String(seat.status || "").toLowerCase();
+      const fresh = isPresenceFresh(seat);
+      const isLive = fresh && seatStatus !== "offline" && seatStatus !== "left" && seatStatus !== "terminated";
+
+      if (isLive) {
         statusText.innerHTML = '<span class="text-success" style="color:var(--color-success); font-weight:700;">Active</span>';
         if (kickBtn) kickBtn.classList.remove("hidden");
       } else {
@@ -4637,8 +4650,11 @@ async function bootstrapApplicationWorkspaceRuntime() {
   if (cacheUserId) {
     const onlineSnap = await db.ref("onlineUsers/" + cacheUserId).get();
     const storedSessionToken = sessionStorage.getItem("active_session_token") || "";
-    if (onlineSnap.exists() && storedSessionToken && onlineSnap.val().sessionToken === storedSessionToken) {
-      currentUser = { ...onlineSnap.val(), handRaised: !!onlineSnap.val().handRaised, handRaisedAt: onlineSnap.val().handRaisedAt || 0 };
+    const storedUser = onlineSnap.exists() ? onlineSnap.val() : null;
+    const storedStatus = String(storedUser?.status || "").toLowerCase();
+    const canRestore = !!(storedUser && storedSessionToken && storedUser.sessionToken === storedSessionToken && storedStatus !== "offline" && storedStatus !== "left" && storedStatus !== "terminated" && !storedUser.exitLoggedAt && !storedUser.leftAt && !storedUser.disconnectRequestedAt && !storedUser.exitPending && isPresenceFresh(storedUser));
+    if (canRestore) {
+      currentUser = { ...storedUser, handRaised: !!storedUser.handRaised, handRaisedAt: storedUser.handRaisedAt || 0 };
             currentUser.name = getCanonicalSeatName(currentUser.code, currentUser.name);
       const restoredJoinedAt = getSessionRoomStartTimestamp(currentUser, Date.now());
       currentUser.joinedAt = restoredJoinedAt;
