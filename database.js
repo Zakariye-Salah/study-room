@@ -2327,41 +2327,69 @@ async function renderWeeklyBestUsersSnapshot() {
   const joinedCount = document.getElementById("bestUsersJoinedCount");
   const courseCount = document.getElementById("bestUsersCourseCount");
   if (!panel || !roomList || !courseList) return;
+
   syncBestUsersSnapshotActionVisibility();
+
   const now = Date.now();
   if (window.__weeklyBestUsersSnapshotLoading) return;
   if (window.__weeklyBestUsersSnapshotLastAt && (now - window.__weeklyBestUsersSnapshotLastAt) < 25000) return;
+
   window.__weeklyBestUsersSnapshotLastAt = now;
   window.__weeklyBestUsersSnapshotLoading = true;
 
   try {
-    const [attendanceSnap, courseSnap, seatsSnap, onlineSnap] = await Promise.all([
-      db.ref("attendance").get(),
-      db.ref(COURSE_SESSION_COLLECTION).get(),
-      db.ref("seats").get(),
-      db.ref("onlineUsers").get()
+    const [weeklyRoomSnap, weeklyCourseSnap] = await Promise.all([
+      db.ref("weeklyHours").get(),
+      db.ref("weeklyCourseHours").get()
     ]);
 
-    const presenceMerged = mergePresenceMaps(
-      getPresenceMapFromSeatsSnapshot(seatsSnap.val() || {}),
-      getPresenceMapFromSeatsSnapshot(onlineSnap.val() || {})
-    );
-    const rawAttendanceEvents = Object.values(attendanceSnap.val() || {}).sort((a, b) => (a.time || 0) - (b.time || 0));
-    const attendanceEvents = buildResolvedAttendanceEvents(rawAttendanceEvents, presenceMerged, now);
-    const roomSessions = buildRoomSessionsFromAttendance(attendanceEvents, presenceMerged, now).filter(item => isTimestampInSelectedRange(item.start, "week"));
-    const roomTotalsMap = buildSessionTotalsMap(roomSessions);
-    const courseSessions = buildCourseSessions(Object.values(courseSnap.val() || {}), presenceMerged, now, roomSessions).filter(item => isTimestampInSelectedRange(item.start, "week"));
+    const currentWeekKey = getWeekIdentifier();
+    const weeklyRoomData = weeklyRoomSnap.val() || {};
+    const weeklyCourseData = weeklyCourseSnap.val() || {};
 
-    const roomRank = aggregateTopUsers(roomSessions);
-    const courseRank = aggregateTopUsers(courseSessions, roomTotalsMap);
+    const roomWeek = weeklyRoomData[currentWeekKey] || {};
+    const courseWeek = weeklyCourseData[currentWeekKey] || {};
 
-    const roomUnique = new Set(roomSessions.map(s => s.code)).size;
-    const courseUnique = new Set(courseSessions.map(s => s.code)).size;
+    const buildWeeklyRows = (weekData, roomData = null) => {
+      return Object.entries(weekData)
+        .filter(([, ms]) => Number(ms) > 0)
+        .map(([code, ms]) => {
+          const normalizedCode = normalizeSeatCode(code);
+          const safeTotal = Number(ms) || 0;
+          const roomTotal = roomData ? Number(roomData[normalizedCode] || 0) : 0;
+          return {
+            code: normalizedCode,
+            name: getCanonicalSeatName(normalizedCode, "Unknown"),
+            totalMs: roomData ? (roomTotal > 0 ? Math.min(safeTotal, roomTotal) : safeTotal) : safeTotal
+          };
+        })
+        .sort((a, b) => b.totalMs - a.totalMs || String(a.name).localeCompare(String(b.name)));
+    };
+
+    const assignRanks = (rows) => {
+      let rank = 0;
+      let lastMs = null;
+      return rows.map((row) => {
+        if (lastMs === null || row.totalMs !== lastMs) {
+          rank += 1;
+          lastMs = row.totalMs;
+        }
+        return { ...row, rank };
+      });
+    };
+
+    const roomRank = assignRanks(buildWeeklyRows(roomWeek));
+    const courseRank = assignRanks(buildWeeklyRows(courseWeek, roomWeek));
+
+    const roomUnique = roomRank.length;
+    const courseUnique = courseRank.length;
+
     if (joinedCount) joinedCount.textContent = `Joined: ${roomUnique}`;
     if (courseCount) courseCount.textContent = `Course entered: ${courseUnique}`;
 
     const renderRankList = (target, items, emptyText, type) => {
       if (!target) return;
+
       if (!items.length) {
         target.innerHTML = `<div class="mini-rank-empty">${emptyText}</div>`;
         return;
@@ -2383,6 +2411,7 @@ async function renderWeeklyBestUsersSnapshot() {
             }).join('')}
           </span>
         ` : '';
+
         return `
           <div class="mini-rank-row ${rankClass}">
             ${getRankBadgeMarkup(rankLabel)}
