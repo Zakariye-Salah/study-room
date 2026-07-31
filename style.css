@@ -3384,3 +3384,20 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+
+/* Keep using this if you already have it, or add it once */
+.btn-inline-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  display: inline-block;
+  animation: btnSpin 0.75s linear infinite;
+  flex: 0 0 auto;
+}
+
+@keyframes btnSpin {
+  to { transform: rotate(360deg); }
+}
