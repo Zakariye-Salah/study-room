@@ -1903,6 +1903,65 @@ function validateAIQuestion(question) {
 // Locked AI
 // --------------------------------------------------------------------------
 
+function getSeatClaimButton() {
+  return (
+    document.getElementById("joinBtn") ||
+    document.getElementById("claimSeatSpaceBtn") ||
+    document.getElementById("btnClaimSeatSpace") ||
+    document.querySelector('button[type="submit"]')
+  );
+}
+
+function waitForCurrentUserAndUnlock(timeoutMs = 6000) {
+  const startedAt = Date.now();
+
+  const timer = setInterval(() => {
+    if (currentUser) {
+      clearInterval(timer);
+      unlockStudentAI();
+      return;
+    }
+
+    if (Date.now() - startedAt >= timeoutMs) {
+      clearInterval(timer);
+    }
+  }, 200);
+}
+
+function openSeatAndAutoClaimFromAI() {
+  if (typeof openSeatModal === "function") {
+    openSeatModal();
+  } else if (typeof showTakeSeatModal === "function") {
+    showTakeSeatModal();
+  } else if (typeof openTakeSeatModal === "function") {
+    openTakeSeatModal();
+  }
+
+  let tries = 0;
+  const maxTries = 20;
+
+  const tryClickClaim = () => {
+    if (currentUser) {
+      unlockStudentAI();
+      return;
+    }
+
+    const claimBtn = getSeatClaimButton();
+    if (claimBtn && !claimBtn.disabled) {
+      claimBtn.click();
+      waitForCurrentUserAndUnlock();
+      return;
+    }
+
+    tries += 1;
+    if (tries < maxTries) {
+      setTimeout(tryClickClaim, 150);
+    }
+  };
+
+  setTimeout(tryClickClaim, 250);
+}
+
 function showLockedAI() {
   aiChatStream.innerHTML = AI_LOCKED_HTML;
 
@@ -1914,39 +1973,17 @@ function showLockedAI() {
   const seatBtn = document.getElementById("btnAiTakeSeat");
   const laterBtn = document.getElementById("btnAiLater");
 
-  seatBtn?.addEventListener("click", async () => {
-    const loader = seatBtn.querySelector(".ai-btn-loader");
+  seatBtn?.addEventListener("click", () => {
     seatBtn.disabled = true;
-    laterBtn && (laterBtn.disabled = true);
-    if (loader) loader.classList.remove("hidden");
+    if (laterBtn) laterBtn.disabled = true;
 
-    try {
-      closeAiAssistantModal();
+    closeAiAssistantModal();
+    openSeatAndAutoClaimFromAI();
 
-      if (typeof openSeatModal === "function") {
-        openSeatModal();
-      } else if (typeof showTakeSeatModal === "function") {
-        showTakeSeatModal();
-      } else if (typeof openTakeSeatModal === "function") {
-        openTakeSeatModal();
-      }
-
-      // auto-click the claim button if it exists
-      setTimeout(() => {
-        const claimBtn =
-          document.getElementById("claimSeatSpaceBtn") ||
-          document.getElementById("btnClaimSeatSpace") ||
-          document.querySelector('[data-action="claim-seat"]');
-
-        if (claimBtn && !claimBtn.disabled) {
-          claimBtn.click();
-        }
-      }, 250);
-    } finally {
-      if (loader) loader.classList.add("hidden");
+    setTimeout(() => {
       seatBtn.disabled = false;
       if (laterBtn) laterBtn.disabled = false;
-    }
+    }, 800);
   });
 
   laterBtn?.addEventListener("click", () => {
