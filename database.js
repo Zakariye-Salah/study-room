@@ -1903,16 +1903,29 @@ function validateAIQuestion(question) {
 // Locked AI
 // --------------------------------------------------------------------------
 
+function restoreRememberedJoinCredentials() {
+  if (localStorage.getItem("remember_checked") !== "true") return;
+
+  if (nameInput && !nameInput.value.trim()) {
+    nameInput.value = localStorage.getItem("remembered_name") || "";
+  }
+  if (codeInput && !codeInput.value.trim()) {
+    codeInput.value = localStorage.getItem("remembered_code") || "";
+  }
+  if (pinInput && !pinInput.value.trim()) {
+    pinInput.value = localStorage.getItem("remembered_pin") || "";
+  }
+}
+
 function getSeatClaimButton() {
   return (
     document.getElementById("joinBtn") ||
     document.getElementById("claimSeatSpaceBtn") ||
-    document.getElementById("btnClaimSeatSpace") ||
-    document.querySelector('button[type="submit"]')
+    document.getElementById("btnClaimSeatSpace")
   );
 }
 
-function waitForCurrentUserAndUnlock(timeoutMs = 6000) {
+function waitForCurrentUserAndUnlock(timeoutMs = 8000) {
   const startedAt = Date.now();
 
   const timer = setInterval(() => {
@@ -1928,38 +1941,35 @@ function waitForCurrentUserAndUnlock(timeoutMs = 6000) {
   }, 200);
 }
 
-function openSeatAndAutoClaimFromAI() {
-  if (typeof openSeatModal === "function") {
-    openSeatModal();
-  } else if (typeof showTakeSeatModal === "function") {
-    showTakeSeatModal();
-  } else if (typeof openTakeSeatModal === "function") {
-    openTakeSeatModal();
+function autoSubmitSeatClaimFromAI() {
+  restoreRememberedJoinCredentials();
+
+  const joinForm = document.getElementById("joinForm");
+  const joinBtn = getSeatClaimButton();
+
+  if (!joinForm) {
+    toast("Join form was not found.", "error");
+    return;
   }
 
-  let tries = 0;
-  const maxTries = 20;
-
-  const tryClickClaim = () => {
+  const doSubmit = () => {
     if (currentUser) {
       unlockStudentAI();
       return;
     }
 
-    const claimBtn = getSeatClaimButton();
-    if (claimBtn && !claimBtn.disabled) {
-      claimBtn.click();
-      waitForCurrentUserAndUnlock();
-      return;
+    if (joinBtn) {
+      joinBtn.click();
+    } else if (typeof joinForm.requestSubmit === "function") {
+      joinForm.requestSubmit();
+    } else {
+      joinForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     }
 
-    tries += 1;
-    if (tries < maxTries) {
-      setTimeout(tryClickClaim, 150);
-    }
+    waitForCurrentUserAndUnlock();
   };
 
-  setTimeout(tryClickClaim, 250);
+  requestAnimationFrame(() => requestAnimationFrame(doSubmit));
 }
 
 function showLockedAI() {
@@ -1972,18 +1982,25 @@ function showLockedAI() {
 
   const seatBtn = document.getElementById("btnAiTakeSeat");
   const laterBtn = document.getElementById("btnAiLater");
+  const loader = seatBtn?.querySelector(".ai-btn-loader");
 
   seatBtn?.addEventListener("click", () => {
+    if (seatBtn.disabled) return;
+
     seatBtn.disabled = true;
     if (laterBtn) laterBtn.disabled = true;
+    if (loader) loader.classList.remove("hidden");
 
     closeAiAssistantModal();
-    openSeatAndAutoClaimFromAI();
+    autoSubmitSeatClaimFromAI();
 
     setTimeout(() => {
-      seatBtn.disabled = false;
-      if (laterBtn) laterBtn.disabled = false;
-    }, 800);
+      if (!currentUser) {
+        seatBtn.disabled = false;
+        if (laterBtn) laterBtn.disabled = false;
+      }
+      if (loader) loader.classList.add("hidden");
+    }, 1200);
   });
 
   laterBtn?.addEventListener("click", () => {
