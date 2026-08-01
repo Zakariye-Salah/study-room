@@ -160,6 +160,9 @@ const raisedHandsCount = document.getElementById("raisedHandsCount");
 const raisedHandsList = document.getElementById("raisedHandsList");
 const quickMessageRecipientLabel = document.getElementById("quickMessageRecipientLabel");
 
+
+let leaderModalCountdownTimer = null;
+let leaderModalAutoCloseTimer = null;
 // ==========================================================================
 // STATE MANAGEMENT ENGINE
 // ==========================================================================
@@ -2191,11 +2194,48 @@ async function showCurrentUserRankCelebration() {
     }
     rankCelebrationModalOverlay?.classList.remove('hidden');
     sessionStorage.setItem(modalKey, '1');
+
+    clearInterval(leaderModalCountdownTimer);
+    clearTimeout(leaderModalAutoCloseTimer);
+    
+    let seconds = 5;
+    
+    const countdownEl = document.getElementById("leaderModalCountdown");
+    
+    if (countdownEl) {
+        countdownEl.textContent = seconds;
+    }
+    
+    leaderModalCountdownTimer = setInterval(() => {
+    
+        seconds--;
+    
+        if (countdownEl) {
+            countdownEl.textContent = Math.max(0, seconds);
+        }
+    
+        if (seconds <= 0) {
+    
+            closeRankCelebrationModal();
+    
+        }
+    
+    }, 1000);
+
+leaderModalAutoCloseTimer = setTimeout(() => {
+
+  closeRankCelebrationModal();
+
+}, 5000);
   } catch (_) {}
 }
 
 function closeRankCelebrationModal() {
-  rankCelebrationModalOverlay?.classList.add('hidden');
+
+  clearInterval(leaderModalCountdownTimer);
+  clearTimeout(leaderModalAutoCloseTimer);
+
+  rankCelebrationModalOverlay?.classList.add("hidden");
 }
 
 async function openBestUsersHistoryModal() {
@@ -2358,6 +2398,8 @@ bestUsersHistoryCloseBtn?.addEventListener("click", closeBestUsersHistoryModal);
 bestUsersHistoryModalOverlay?.addEventListener("click", (event) => {
   if (event.target === bestUsersHistoryModalOverlay) closeBestUsersHistoryModal();
 });
+
+
 
 closeRankCelebrationModalBtn?.addEventListener("click", closeRankCelebrationModal);
 rankCelebrationCloseBtn?.addEventListener("click", closeRankCelebrationModal);
