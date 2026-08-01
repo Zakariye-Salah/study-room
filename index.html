@@ -576,17 +576,44 @@
           ></textarea>
   
           <div class="ai-actions-row">
-            <button id="btnSendAiQuestion" class="action-btn primary-btn" type="button">
-              <i class="bi bi-send"></i> Send
+
+            <button
+                id="btnSendAiQuestion"
+                class="action-btn primary-btn">
+        
+                <i class="bi bi-send"></i>
+        
+                Send
+        
             </button>
-            <button id="btnClearAiChat" class="action-btn neutral-btn" type="button">
-              <i class="bi bi-trash"></i> Clear
+        
+            <button
+                id="btnStopAiGeneration"
+                class="action-btn warning-btn"
+                style="display:none;">
+        
+                <i class="bi bi-stop-circle"></i>
+        
+                Stop
+        
             </button>
-          </div>
+        
+            <button
+                id="btnClearAiChat"
+                class="action-btn neutral-btn">
+        
+                <i class="bi bi-trash"></i>
+        
+                Clear
+        
+            </button>
+        
+        </div>
         </div>
       </div>
     </div>
   </div>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="database.js" defer></script>
 </body>
 </html>
