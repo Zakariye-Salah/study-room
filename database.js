@@ -749,20 +749,56 @@ function buildPresencePayload(extra = {}) {
 }
 
 function buildDisconnectTombstone(reason = "tab-close") {
-  const now = Date.now();
+  const roomJoinedAt = currentUser
+    ? getSessionRoomStartTimestamp(currentUser, Date.now())
+    : 0;
+
+  const courseEnteredAt =
+    currentUser && currentUser.inCourse
+      ? Number(currentUser.courseEnteredAt) ||
+        getSessionCourseStartTimestamp(currentUser, roomJoinedAt)
+      : 0;
+
+  /*
+   * Firebase resolves this when the connection actually disconnects,
+   * not when this function is called.
+   */
+  const disconnectTime = firebase.database.ServerValue.TIMESTAMP;
+
   return {
     exitPending: true,
-    disconnectRequestedAt: now,
+
+    disconnectRequestedAt: disconnectTime,
     disconnectReason: reason,
+
+    exitLoggedAt: disconnectTime,
+    exitReason: reason,
+    leftAt: disconnectTime,
+
+    /*
+     * Keep the real original room/course start values.
+     */
+    joinedAt: roomJoinedAt,
+    roomJoinedAt,
+    start: roomJoinedAt,
+
+    inCourse: !!currentUser?.inCourse,
+    activeCourseName:
+      currentUser?.activeCourseName ||
+      (currentUser?.inCourse
+        ? "Full Stack AI Engineer"
+        : ""),
+
+    courseEnteredAt,
+
+    /*
+     * Zero forces the stale-session checker to treat it as disconnected.
+     */
     lastSeen: 0,
     heartbeatAt: 0,
-    exitLoggedAt: now,
-    exitReason: reason,
-    leftAt: now,
     status: "offline"
   };
 }
-
 function getCurrentVisibilityState() {
   try {
     return document.visibilityState || (document.hidden ? "hidden" : "visible");
@@ -770,6 +806,7 @@ function getCurrentVisibilityState() {
     return "visible";
   }
 }
+
 
 
 function getPresenceGraceWindow(user) {
@@ -1329,16 +1366,41 @@ function bindVisibilityPresenceSync() {
 
 function bindUnloadPresenceCleanup() {
   if (document.__studyRoomUnloadSyncBound) return;
+
   document.__studyRoomUnloadSyncBound = true;
 
+  let shutdownHandled = false;
+
   const handleShutdown = () => {
-    if (!currentUser || isSessionTeardownInProgress) return;
-    syncBrowserVisibilityState().catch(() => {});
-    leaveRoom(true, "tab-close").catch(() => {});
+    if (
+      shutdownHandled ||
+      !currentUser ||
+      isSessionTeardownInProgress
+    ) {
+      return;
+    }
+
+    shutdownHandled = true;
+    stopSessionHeartbeat();
+
+    if (visibilitySyncTimeout) {
+      clearTimeout(visibilitySyncTimeout);
+      visibilitySyncTimeout = null;
+    }
+
+    /*
+     * Firebase onDisconnect handles tab closing.
+     * Do not call asynchronous leaveRoom() during browser shutdown.
+     */
   };
 
-  window.addEventListener("pagehide", handleShutdown, { capture: true });
-  window.addEventListener("beforeunload", handleShutdown, { capture: true });
+  window.addEventListener("pagehide", handleShutdown, {
+    capture: true
+  });
+
+  window.addEventListener("beforeunload", handleShutdown, {
+    capture: true
+  });
 }
 
 async function registerSessionDisconnectHandlers() {
@@ -3337,32 +3399,6 @@ async function openCourseEmbedWindow() {
     return;
   }
 
-  currentUser.inCourse = true;
-  currentUser.activeCourseName = "Full Stack AI Engineer";
-  currentUser.courseEnteredAt = Date.now();
-  currentUser.lastSeen = Date.now();
-  currentUser.heartbeatAt = Date.now();
-  currentCourseSessionId = await findOpenCourseSessionId(currentUser.code, currentSessionToken) || db.ref(COURSE_SESSION_COLLECTION).push().key;
-  syncBrowserTitle();
-  await db.ref(`seatLeases/${currentUser.code}`).transaction((current) => {
-    if (current && current.sessionToken && current.sessionToken !== currentSessionToken) {
-      return;
-    }
-    return {
-      seat: currentUser.code,
-      name: currentUser.name,
-      ownerId: currentUser.id,
-      deviceId: currentDeviceId,
-      tabId: currentTabId,
-      sessionToken: currentSessionToken,
-      inCourse: true,
-      activeCourseName: currentUser.activeCourseName,
-      courseEnteredAt: currentUser.courseEnteredAt,
-      start: currentUser.start,
-      lastSeen: Date.now(),
-      heartbeatAt: Date.now()
-    };
-  });
 
   const activeCourseSessionRef = db.ref(`${COURSE_SESSION_COLLECTION}/${currentCourseSessionId}`);
   const activeCourseSessionSnap = await activeCourseSessionRef.get().catch(() => null);
@@ -3390,34 +3426,79 @@ async function openCourseEmbedWindow() {
     });
   }
 
-  await db.ref("onlineUsers/" + currentUser.id).update({
+  const courseEnterTime = Date.now();
+
+
+  currentUser.inCourse = true;
+  currentUser.activeCourseName = "Full Stack AI Engineer";
+  currentUser.courseEnteredAt = courseEnterTime;
+  currentUser.lastSeen = courseEnterTime;
+  currentUser.heartbeatAt = courseEnterTime;
+  currentCourseSessionId = await findOpenCourseSessionId(currentUser.code, currentSessionToken) || db.ref(COURSE_SESSION_COLLECTION).push().key;
+  syncBrowserTitle();
+
+  
+  await db.ref(`seatLeases/${currentUser.code}`).update({
+
+   
+
+    seat: currentUser.code,
+    name: currentUser.name,
+    ownerId: currentUser.id,
+    deviceId: currentDeviceId,
+    tabId: currentTabId,
+    sessionToken: currentSessionToken,
     inCourse: true,
     activeCourseName: currentUser.activeCourseName,
     roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || 0,
-    courseEnteredAt: currentUser.courseEnteredAt,
-    lastSeen: currentUser.lastSeen,
-    heartbeatAt: currentUser.heartbeatAt
+    start: currentUser.start,
+    courseEnteredAt: courseEnterTime,
+    lastSeen: courseEnterTime,
+    heartbeatAt: courseEnterTime,
+    status: "in-course"
   });
-
-  await db.ref("seats/" + currentUser.code).update({
+  
+  await db.ref(`onlineUsers/${currentUser.id}`).update({
     inCourse: true,
     activeCourseName: currentUser.activeCourseName,
     roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || 0,
-    courseEnteredAt: currentUser.courseEnteredAt,
-    lastSeen: currentUser.lastSeen,
-    heartbeatAt: currentUser.heartbeatAt
+    courseEnteredAt: courseEnterTime,
+    lastSeen: courseEnterTime,
+    heartbeatAt: courseEnterTime,
+    status: "in-course"
   });
-
+  
+  await db.ref(`seats/${currentUser.code}`).update({
+    inCourse: true,
+    activeCourseName: currentUser.activeCourseName,
+    roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || 0,
+    courseEnteredAt: courseEnterTime,
+    lastSeen: courseEnterTime,
+    heartbeatAt: courseEnterTime,
+    status: "in-course"
+  });
+  
+  /*
+   * Register again after courseEnteredAt is saved.
+   * The disconnect time will be resolved later by Firebase.
+   */
+  await registerSessionDisconnectHandlers().catch(() => {});
+  
   await pushAttendanceOnce({
     name: currentUser.name,
     code: currentUser.code,
     action: "course-enter",
-    time: Date.now(),
-    roomJoinedAt: currentUser.roomJoinedAt || currentUser.start || 0,
-    joinedAt: currentUser.joinedAt || currentUser.start || 0,
+    time: courseEnterTime,
+    joinedAt: courseEnterTime,
+    courseEnteredAt: courseEnterTime,
+    roomJoinedAt:
+      currentUser.roomJoinedAt ||
+      currentUser.start ||
+      0,
     courseName: currentUser.activeCourseName,
     sessionToken: currentSessionToken
   });
+  
 
   startSessionHeartbeat();
   updateCourseActionButton();
