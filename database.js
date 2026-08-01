@@ -418,24 +418,7 @@ function toast(msg, type = "info") {
   }, 4000);
 }
 
-function showJoinWelcomePopup(name, code) {
-  const overlay = document.getElementById("welcomePopupOverlay");
-  const title = document.getElementById("welcomePopupTitle");
-  const body = document.getElementById("welcomePopupBody");
-  if (!overlay || !title || !body) return;
 
-  const message = JOIN_WELCOME_MESSAGES[Math.floor(Math.random() * JOIN_WELCOME_MESSAGES.length)];
-  title.innerHTML = `Welcome <span>${escapeHtml(name)}</span>`;
-  body.innerHTML = `<strong>Seat ${escapeHtml(code)}</strong><br><span>Study Room Pro</span><br>${escapeHtml(message)}`;
-  overlay.classList.remove("hidden");
-  overlay.classList.add("show");
-
-  clearTimeout(window.__welcomePopupTimer);
-  window.__welcomePopupTimer = setTimeout(() => {
-    overlay.classList.remove("show");
-    setTimeout(() => overlay.classList.add("hidden"), 260);
-  }, 3000);
-}
 
 // ==========================================================================
 // FORM FIELD VISIBILITY TOGGLE (EYE CONTROL)
@@ -3135,7 +3118,6 @@ async function joinRoom(name, code, pin) {
   formBox.classList.add("hidden");
   pinActionBox.classList.remove("hidden");
   setStatusText(true, normalizedCode, getCanonicalSeatName(normalizedCode, targetSeat.name));
-  showJoinWelcomePopup(getCanonicalSeatName(normalizedCode, targetSeat.name), normalizedCode);
 
   startTimer();
   startSessionHeartbeat();
