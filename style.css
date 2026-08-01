@@ -2614,37 +2614,94 @@ body {
 }
 
 @media (max-width: 600px) {
-  .main-header {
-    width: calc(100% - 12px);
-    max-width: calc(100vw - 12px);
-    padding: 12px 14px;
+
+  .main-header{
+    width:calc(100% - 12px);
+    max-width:calc(100vw - 12px);
+    padding:10px 12px;
   }
-  .brand h1 {
-    font-size: 17px;
+
+  .brand{
+    gap:8px;
+    min-width:0;
+    flex:1;
   }
-  .brand p {
-    font-size: 10px;
+
+  .brand-logo{
+    width:40px;
+    height:40px;
+    padding:4px;
   }
-  .header-actions {
-    gap: 8px;
+
+  .brand-text-wrapper h1{
+    font-size:16px;
+    white-space:nowrap;
+    line-height:1.1;
   }
-  .header-actions .icon-btn,
-  .header-actions .premium-btn {
-    transform: scale(0.96);
+
+  .brand-text-wrapper p{
+    font-size:9px;
+    white-space:nowrap;
+    line-height:1.1;
   }
-  .welcome-popup-card {
-    width: calc(100vw - 20px);
-    padding: 18px 16px;
+
+  .header-actions{
+    gap:4px;
+    flex-shrink:0;
   }
-  .welcome-popup-card h2 {
-    font-size: 20px;
+
+  /* Smaller circular buttons */
+  .header-actions .icon-btn{
+    width:36px;
+    height:36px;
+    min-width:36px;
+    padding:0;
+    border-radius:10px;
   }
-  .bell-dropdown-panel {
-    left: 50%;
-    right: auto;
-    transform: translateX(-50%);
-    width: min(96vw, 360px);
+
+  .header-actions .icon-btn i{
+    font-size:16px;
   }
+
+  /* Smaller Admin button */
+  .header-actions .premium-btn{
+    height:36px;
+    padding:0 10px;
+    font-size:12px;
+    border-radius:10px;
+    gap:5px;
+    white-space:nowrap;
+  }
+
+  .header-actions .premium-btn i{
+    font-size:14px;
+  }
+
+  /* Smaller notification badge */
+  .bell-counter-badge{
+    min-width:16px;
+    height:16px;
+    font-size:9px;
+    top:-3px;
+    right:-3px;
+  }
+
+  .welcome-popup-card{
+    width:calc(100vw - 20px);
+    padding:18px 16px;
+  }
+
+  .welcome-popup-card h2{
+    font-size:20px;
+  }
+
+  .bell-dropdown-panel{
+    left:50%;
+    right:auto;
+    transform:translateX(-50%);
+    width:min(96vw,360px);
+  }
+
 }
 body {
   padding-bottom: 90px;
@@ -3424,4 +3481,83 @@ body {
   50%{
       opacity:.55;
   }
+}
+
+/* ===========================
+   Premium Header Brand
+=========================== */
+
+.brand{
+  display:flex;
+  align-items:center;
+  gap:16px;
+  user-select:none;
+}
+
+.brand-logo{
+  width:54px;
+  height:54px;
+  object-fit:contain;
+  border-radius:14px;
+  background:rgba(255,255,255,.06);
+  padding:6px;
+  border:1px solid rgba(255,255,255,.08);
+  box-shadow:
+      0 10px 25px rgba(37,99,235,.18),
+      0 0 18px rgba(59,130,246,.15);
+  transition:all .35s ease;
+}
+
+.brand-logo:hover{
+  transform:rotate(-4deg) scale(1.08);
+  box-shadow:
+      0 15px 35px rgba(37,99,235,.28),
+      0 0 24px rgba(59,130,246,.30);
+}
+
+.brand-text-wrapper{
+  display:flex;
+  flex-direction:column;
+}
+
+.brand-text-wrapper h1{
+  margin:0;
+  font-size:1.45rem;
+  font-weight:800;
+  letter-spacing:-0.03em;
+  color:var(--text-primary);
+  line-height:1.1;
+}
+
+.brand-text-wrapper p{
+  margin-top:3px;
+  margin-bottom:0;
+  font-size:.82rem;
+  color:var(--text-secondary);
+  font-weight:600;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+}
+
+@media (max-width:768px){
+
+    .brand{
+        gap:10px;
+    }
+
+    .brand-logo{
+        width:42px;
+        height:42px;
+        border-radius:10px;
+        padding:4px;
+    }
+
+    .brand-text-wrapper h1{
+        font-size:1.1rem;
+    }
+
+    .brand-text-wrapper p{
+        font-size:.68rem;
+    }
+
 }
