@@ -1299,18 +1299,81 @@ const aiChatStream = document.getElementById("aiChatStream");
 const btnSendAiQuestion = document.getElementById("btnSendAiQuestion");
 const btnClearAiChat = document.getElementById("btnClearAiChat");
 
+const btnStopAiGeneration =
+    document.getElementById(
+        "btnStopAiGeneration"
+    );
+let aiCacheLoaded = false;
+
+
+// ==========================================================================
+// AI REQUEST CONTROLLER
+// ==========================================================================
+
+let aiAbortController = null;
+
+let aiGenerating = false;
 // --------------------------------------------------------------------------
 // Configuration
 // --------------------------------------------------------------------------
 
 const AI_ENDPOINT = "/.netlify/functions/ai";
 
-// keep only last few messages
-const MAX_HISTORY = 4;
+// Only keep the latest conversation for Gemini
+const MAX_HISTORY = 2;
+// Maximum messages stored locally
+const MAX_LOCAL_MESSAGES = 60;
 
-// prevent endless retries
-const MAX_RETRY = 1;
+// Retry only once
+const MAX_RETRY = 0;
 
+// --------------------------------------------------------------------------
+// Local Storage
+// --------------------------------------------------------------------------
+
+function getAiStorageKey() {
+
+  const studentId =
+
+      currentUser?.id ||
+
+      currentUser?.code ||
+
+      currentUser?.name ||
+
+      "guest";
+
+  return `study-room-ai-${studentId}`;
+
+}
+const AI_STORAGE_VERSION = 1;
+
+const AI_STORAGE_EXPIRE_DAYS = 7;
+
+
+// ==========================================================================
+// AI CACHE
+// ==========================================================================
+
+const AI_CACHE_KEY = "study-room-ai-cache";
+
+const AI_CACHE_VERSION = 1;
+
+const AI_CACHE_MAX_ITEMS = 100;
+
+const AI_CACHE_EXPIRE_DAYS = 30;
+
+let aiCache = {};
+
+// ==========================================================================
+// AI REQUEST LIMITS
+// ==========================================================================
+
+const AI_MIN_REQUEST_INTERVAL = 5000; // 5 seconds
+
+const AI_MAX_MESSAGE_LENGTH = 800;
+
+let lastAiRequestTime = 0;
 // --------------------------------------------------------------------------
 // Runtime State
 // --------------------------------------------------------------------------
@@ -1319,9 +1382,113 @@ let aiMessages = [];
 
 let aiBusy = false;
 
+
+// ==========================================================================
+// LOCAL AI COMMANDS
+// ==========================================================================
+
+const AI_LOCAL_COMMANDS = {
+
+  "/help": "help",
+
+  "/commands": "help",
+
+  "/clear": "clear",
+
+  "/motivate": "motivate",
+
+  "/course": "course",
+
+  "/debug": "debug",
+
+  "/tips": "tips",
+
+  "/about": "about"
+
+};
 // --------------------------------------------------------------------------
 // Starter Message
 // --------------------------------------------------------------------------
+
+// --------------------------------------------------------------------------
+// Locked AI HTML
+// --------------------------------------------------------------------------
+
+const AI_LOCKED_HTML = `
+<div class="ai-locked-screen">
+
+    <div class="ai-lock-icon">
+        🔒
+    </div>
+
+    <h2>Study Room Pro AI</h2>
+
+    <p class="ai-lock-description">
+
+        👋 Hello!
+
+        <br><br>
+
+        Welcome to <strong>Study Room Pro AI</strong>.
+
+        <br><br>
+
+        The AI Assistant is available only for students who have joined today's study room.
+
+        <br><br>
+
+        Please take your seat first to unlock all AI features.
+
+    </p>
+
+    <div class="ai-course-list">
+
+        <div>✅ HTML & CSS</div>
+
+        <div>✅ JavaScript</div>
+
+        <div>✅ React</div>
+
+        <div>✅ Next.js</div>
+
+        <div>✅ MongoDB</div>
+
+        <div>✅ Firebase</div>
+
+        <div>✅ AI & Prompt Engineering</div>
+
+        <div>✅ Debugging</div>
+
+        <div>✅ Project Help</div>
+
+        <div>✅ Motivation 😄</div>
+
+    </div>
+
+    <div class="ai-lock-buttons">
+
+        <button
+            id="btnAiTakeSeat"
+            class="action-btn primary-btn"
+            type="button">
+
+            🎓 Take My Seat
+
+        </button>
+
+        <button
+            id="btnAiLater"
+            class="action-btn neutral-btn"
+            type="button">
+
+            Maybe Later
+
+        </button>
+
+    </div>
+
+</div>
+`;
 
 const AI_WELCOME = `
 👋 Welcome to Study Room Pro AI!
@@ -1344,18 +1511,749 @@ Ask me anything 😄
 `.trim();
 
 // --------------------------------------------------------------------------
+// Local Storage Helpers
+// --------------------------------------------------------------------------
+
+function saveAiChat() {
+
+  try {
+
+      trimAiHistory();
+
+      if (!Array.isArray(aiMessages) || aiMessages.length === 0) {
+
+          clearAiChatStorage();
+          return;
+
+      }
+
+      // Don't save while waiting for AI
+      if (aiMessages.some(m => m.text === "Thinking...")) {
+
+          return;
+
+      }
+
+      const payload = {
+
+          version: AI_STORAGE_VERSION,
+
+          updatedAt: Date.now(),
+
+          messages: [...aiMessages]
+
+      };
+
+      localStorage.setItem(
+
+        getAiStorageKey(),
+
+          JSON.stringify(payload)
+
+      );
+
+  }
+
+  catch (error) {
+
+      console.warn(
+
+          "Study Room AI: Failed to save chat.",
+
+          error
+
+      );
+
+  }
+
+}
+
+function loadAiChat() {
+
+  try {
+
+      const raw = localStorage.getItem(
+
+        getAiStorageKey()
+
+      );
+
+      if (!raw) return false;
+
+      const data = JSON.parse(raw);
+
+      if (!data || typeof data !== "object") {
+
+          clearAiChatStorage();
+          return false;
+
+      }
+
+      if (data.version !== AI_STORAGE_VERSION) {
+
+          clearAiChatStorage();
+          return false;
+
+      }
+
+      const maxAge =
+
+          AI_STORAGE_EXPIRE_DAYS *
+
+          24 *
+
+          60 *
+
+          60 *
+
+          1000;
+
+      const age =
+
+          Date.now() -
+
+          Number(data.updatedAt || 0);
+
+      if (age > maxAge) {
+
+          clearAiChatStorage();
+          return false;
+
+      }
+
+      if (!Array.isArray(data.messages)) {
+
+          clearAiChatStorage();
+          return false;
+
+      }
+
+      // Validate messages
+      aiMessages = data.messages.filter(message => {
+
+          return (
+
+              message &&
+
+              typeof message === "object" &&
+
+              typeof message.role === "string" &&
+
+              typeof message.text === "string"
+
+          );
+
+      });
+
+      trimAiHistory();
+
+      // Save trimmed history back
+      saveAiChat();
+
+      return aiMessages.length > 0;
+
+  }
+
+  catch (error) {
+
+      console.warn(
+
+          "Study Room AI: Failed to load chat.",
+
+          error
+
+      );
+
+      clearAiChatStorage();
+
+      return false;
+
+  }
+
+}
+
+function clearAiChatStorage() {
+
+  try {
+
+      localStorage.removeItem(
+
+        getAiStorageKey()
+
+      );
+
+  }
+
+  catch (error) {
+
+      console.warn(
+
+          "Study Room AI: Failed to clear chat storage.",
+
+          error
+
+      );
+
+  }
+
+}
+
+
+function loadAiCache() {
+
+  try {
+
+      const raw = localStorage.getItem(AI_CACHE_KEY);
+
+      if (!raw) {
+
+          aiCache = {};
+
+          return;
+
+      }
+
+      const data = JSON.parse(raw);
+
+      if (!data || data.version !== AI_CACHE_VERSION) {
+
+          localStorage.removeItem(AI_CACHE_KEY);
+
+          aiCache = {};
+
+          return;
+
+      }
+
+      const expireTime =
+          AI_CACHE_EXPIRE_DAYS *
+          24 *
+          60 *
+          60 *
+          1000;
+
+      const now = Date.now();
+
+      aiCache = {};
+
+      Object.entries(data.items || {}).forEach(([key, value]) => {
+
+          if (
+
+              value &&
+
+              now - value.updatedAt < expireTime
+
+          ) {
+
+              aiCache[key] = value;
+
+          }
+
+      });
+
+  }
+
+  catch {
+
+      aiCache = {};
+
+  }
+
+}
+
+function saveAiCache() {
+
+  try {
+
+      const entries = Object.entries(aiCache);
+
+      entries.sort(
+
+          (a, b) =>
+
+          b[1].updatedAt -
+
+          a[1].updatedAt
+
+      );
+
+      while (entries.length > AI_CACHE_MAX_ITEMS) {
+
+          entries.pop();
+
+      }
+
+      const items = {};
+
+      entries.forEach(([k, v]) => {
+
+          items[k] = v;
+
+      });
+
+      localStorage.setItem(
+
+          AI_CACHE_KEY,
+
+          JSON.stringify({
+
+              version: AI_CACHE_VERSION,
+
+              items
+
+          })
+
+      );
+
+  }
+
+  catch (error) {
+
+      console.warn(error);
+
+  }
+
+}
+
+function normalizeAIQuestion(question) {
+
+  return question
+
+      .trim()
+
+      .toLowerCase()
+
+      .replace(/\s+/g, " ");
+
+}
+
+
+function cacheAIAnswer(question, answer) {
+
+  const key = normalizeAIQuestion(question);
+
+  aiCache[key] = {
+
+      answer,
+
+      updatedAt: Date.now()
+
+  };
+
+  saveAiCache();
+
+}
+
+
+// ==========================================================================
+// Validate AI Question
+// ==========================================================================
+
+function validateAIQuestion(question) {
+
+  const text = String(question || "").trim();
+
+  if (!text) {
+
+      return {
+
+          ok: false,
+
+          message: "Please type a question first."
+
+      };
+
+  }
+
+  if (text.length > AI_MAX_MESSAGE_LENGTH) {
+
+      return {
+
+          ok: false,
+
+          message:
+              `Your message is too long.\n\nMaximum ${AI_MAX_MESSAGE_LENGTH} characters.`
+
+      };
+
+  }
+
+  return {
+
+      ok: true,
+
+      text
+
+  };
+
+}
+// --------------------------------------------------------------------------
+// Locked AI
+// --------------------------------------------------------------------------
+
+function showLockedAI() {
+
+  aiChatStream.innerHTML = AI_LOCKED_HTML;
+
+  document.querySelector(".ai-input-box").style.display = "none";
+
+  aiChatStream.scrollTop = 0;
+
+  const seatBtn = document.getElementById("btnAiTakeSeat");
+
+  const laterBtn = document.getElementById("btnAiLater");
+
+  seatBtn?.addEventListener("click", () => {
+
+      closeAiAssistantModal();
+
+      // -------------------------------------------------
+      // Open your Take Seat modal here
+      // -------------------------------------------------
+
+      if (typeof openSeatModal === "function") {
+
+          openSeatModal();
+
+          return;
+
+      }
+
+      if (typeof showTakeSeatModal === "function") {
+
+          showTakeSeatModal();
+
+          return;
+
+      }
+
+      if (typeof openTakeSeatModal === "function") {
+
+          openTakeSeatModal();
+
+          return;
+
+      }
+
+      toast(
+
+          "Please click Take Seat first.",
+
+          "warning"
+
+      );
+
+  });
+
+  laterBtn?.addEventListener("click", () => {
+
+      closeAiAssistantModal();
+
+  });
+
+}
+
+// --------------------------------------------------------------------------
+// Active Student AI
+// --------------------------------------------------------------------------
+
+// --------------------------------------------------------------------------
+// Show Student AI
+// --------------------------------------------------------------------------
+
+function showStudentAI(studentName = getCurrentStudentName()) {
+
+  // ------------------------------------------------------
+  // Update Floating Button
+  // ------------------------------------------------------
+
+  updateAiFloatingButton();
+
+  // ------------------------------------------------------
+  // Show Input Area
+  // ------------------------------------------------------
+
+  const inputBox = document.querySelector(".ai-input-box");
+
+  if (inputBox) {
+
+      inputBox.style.display = "";
+
+  }
+
+  // ------------------------------------------------------
+  // Enable Controls
+  // ------------------------------------------------------
+
+  if (btnSendAiQuestion) {
+
+      btnSendAiQuestion.disabled = false;
+
+  }
+
+  if (btnClearAiChat) {
+
+      btnClearAiChat.disabled = false;
+
+  }
+
+  if (aiQuestionInput) {
+
+      aiQuestionInput.disabled = false;
+
+      aiQuestionInput.placeholder =
+          "Ask anything about HTML, CSS, JavaScript, React, AI, Firebase...";
+
+  }
+
+  // ------------------------------------------------------
+  // Restore Saved Conversation
+  // ------------------------------------------------------
+
+  const restored = loadAiChat();
+
+  if (restored) {
+
+      renderAiChat();
+
+      requestAnimationFrame(() => {
+
+          aiQuestionInput?.focus();
+
+      });
+
+      return;
+
+  }
+
+  // ------------------------------------------------------
+  // No Previous Conversation
+  // ------------------------------------------------------
+
+  aiMessages = [];
+
+  aiMessages.push({
+
+      role: "assistant",
+
+      text:
+`👋 Welcome ${studentName}!
+
+I'm your Study Room Pro AI Assistant.
+
+I'm happy to see you in today's study room. 🎉
+
+I can help you with:
+
+💻 HTML
+
+🎨 CSS
+
+⚡ JavaScript
+
+⚛ React
+
+▲ Next.js
+
+🍃 MongoDB
+
+🔥 Firebase
+
+🤖 Artificial Intelligence
+
+🧠 Prompt Engineering
+
+🐛 Debugging
+
+🚀 Building Projects
+
+📚 Understanding Today's Lessons
+
+💡 Study Tips
+
+😊 Motivation
+
+You can also ask me to:
+
+• Explain code
+• Fix errors
+• Improve your project
+• Generate examples
+• Explain difficult topics simply
+• Give practice exercises
+
+Let's learn something awesome today! 🚀`
+
+  });
+
+  saveAiChat();
+
+  renderAiChat();
+
+  requestAnimationFrame(() => {
+
+      aiQuestionInput?.focus();
+
+  });
+
+}
+// --------------------------------------------------------------------------
+// Get Current Student Name
+// --------------------------------------------------------------------------
+
+function getCurrentStudentName() {
+
+  if (!currentUser) return "Student";
+
+  return (
+
+      currentUser.name ||
+
+      currentUser.fullName ||
+
+      currentUser.studentName ||
+
+      currentUser.username ||
+
+      "Student"
+
+  );
+
+}
+
+// --------------------------------------------------------------------------
+// Update Floating AI Button
+// --------------------------------------------------------------------------
+
+function updateAiFloatingButton() {
+
+  if (!aiFloatingBtn) return;
+
+  const icon = aiFloatingBtn.querySelector("i");
+
+  if (!icon) return;
+
+  if (currentUser) {
+
+      icon.className = "bi bi-stars";
+
+      aiFloatingBtn.title = "Study Room Pro AI";
+
+  } else {
+
+      icon.className = "bi bi-lock-fill";
+
+      aiFloatingBtn.title = "Take your seat to unlock AI";
+
+  }
+
+}
+
+
+// --------------------------------------------------------------------------
+// Initialize AI
+// --------------------------------------------------------------------------
+
+function initializeStudentAI() {
+
+  if (!aiCacheLoaded) {
+
+    loadAiCache();
+
+    aiCacheLoaded = true;
+
+}  
+updateAiFloatingButton();
+
+  if (!currentUser) {
+
+      showLockedAI();
+
+      return;
+
+  }
+
+  showStudentAI(
+
+    getCurrentStudentName()
+
+);
+
+}
+
+// --------------------------------------------------------------------------
+// Unlock AI After Student Takes Seat
+// --------------------------------------------------------------------------
+
+function unlockStudentAI() {
+
+  initializeStudentAI();
+
+  toast(
+
+    `Welcome ${getCurrentStudentName()}! AI Assistant unlocked.`,
+
+    "success"
+
+);
+
+  if (!aiAssistantModalOverlay.classList.contains("hidden")) {
+
+      showStudentAI(getCurrentStudentName());
+
+  }
+
+}
+
+// --------------------------------------------------------------------------
+// Lock AI
+// --------------------------------------------------------------------------
+
+function lockStudentAI() {
+
+  updateAiFloatingButton();
+
+  if (!aiAssistantModalOverlay.classList.contains("hidden")) {
+
+      showLockedAI();
+
+  }
+
+}
+// --------------------------------------------------------------------------
 // Helpers
 // --------------------------------------------------------------------------
 
 function trimAiHistory() {
 
-    if (aiMessages.length <= MAX_HISTORY * 2) return;
+  // -----------------------------
+  // Trim conversation sent to AI
+  // -----------------------------
 
-    const welcome = aiMessages[0];
+  if (aiMessages.length > MAX_HISTORY * 2 + 1) {
 
-    const recent = aiMessages.slice(-(MAX_HISTORY * 2));
+      const welcome = aiMessages[0];
 
-    aiMessages = [welcome, ...recent];
+      const recent = aiMessages.slice(-(MAX_HISTORY * 2));
+
+      aiMessages = [welcome, ...recent];
+
+  }
+
+  // -----------------------------
+  // Prevent unlimited localStorage
+  // -----------------------------
+
+  if (aiMessages.length > MAX_LOCAL_MESSAGES) {
+
+      const welcome = aiMessages[0];
+
+      const recent = aiMessages.slice(-(MAX_LOCAL_MESSAGES - 1));
+
+      aiMessages = [welcome, ...recent];
+
+  }
 
 }
 
@@ -1379,13 +2277,25 @@ function buildAiRequestHistory() {
 
 function setAiLoading(state) {
 
-    aiBusy = state;
+  aiBusy = state;
 
-    btnSendAiQuestion.disabled = state;
+  aiGenerating = state;
 
-    btnClearAiChat.disabled = state;
+  if (btnSendAiQuestion)
+      btnSendAiQuestion.disabled = state;
 
-    aiQuestionInput.disabled = state;
+  if (btnClearAiChat)
+      btnClearAiChat.disabled = state;
+
+  if (aiQuestionInput)
+      aiQuestionInput.disabled = state;
+
+  if (btnStopAiGeneration) {
+
+      btnStopAiGeneration.style.display =
+          state ? "" : "none";
+
+  }
 
 }
 
@@ -1393,29 +2303,14 @@ function setAiLoading(state) {
 // --------------------------------------------------------------------------
 // Open AI Window
 // --------------------------------------------------------------------------
-
 function openAiAssistantModal() {
 
   if (!aiAssistantModalOverlay) return;
 
   aiAssistantModalOverlay.classList.remove("hidden");
 
-  if (!aiMessages.length) {
-
-      aiMessages.push({
-          role: "assistant",
-          text: AI_WELCOME
-      });
-
-      renderAiChat();
-
-  }
-
-  setTimeout(() => {
-
-      aiQuestionInput.focus();
-
-  }, 150);
+  // Initialize AI based on whether a student has taken a seat.
+  initializeStudentAI();
 
 }
 
@@ -1435,17 +2330,23 @@ function closeAiAssistantModal() {
 
 function clearAiChat() {
 
+  clearAiChatStorage();
+
   aiMessages = [];
 
-  aiMessages.push({
+  if (currentUser) {
 
-      role: "assistant",
+    showStudentAI(
 
-      text: AI_WELCOME
+      getCurrentStudentName()
+  
+  );
 
-  });
+  } else {
 
-  renderAiChat();
+      showLockedAI();
+
+  }
 
 }
 
@@ -1453,11 +2354,24 @@ function clearAiChat() {
 // Render Chat
 // --------------------------------------------------------------------------
 
+// ==========================================================================
+// Render AI Chat
+// ==========================================================================
 function renderAiChat() {
 
   if (!aiChatStream) return;
 
+  // Remember scroll position
+  const shouldAutoScroll =
+      aiChatStream.scrollTop +
+      aiChatStream.clientHeight >=
+      aiChatStream.scrollHeight - 120;
+
   aiChatStream.innerHTML = "";
+
+  // --------------------------------------------------------
+  // Empty State
+  // --------------------------------------------------------
 
   if (!aiMessages.length) {
 
@@ -1465,8 +2379,10 @@ function renderAiChat() {
 
       empty.className = "ai-empty-state";
 
-      empty.textContent =
-          "Start chatting with Study Room Pro AI.";
+      empty.innerHTML = `
+          <h4>🤖 Study Room Pro AI</h4>
+          <p>Start chatting with your AI learning assistant.</p>
+      `;
 
       aiChatStream.appendChild(empty);
 
@@ -1474,7 +2390,11 @@ function renderAiChat() {
 
   }
 
-  aiMessages.forEach(message => {
+  // --------------------------------------------------------
+  // Render Messages
+  // --------------------------------------------------------
+
+  aiMessages.forEach((message) => {
 
       const bubble = document.createElement("div");
 
@@ -1484,6 +2404,10 @@ function renderAiChat() {
               ? "user"
               : "bot");
 
+      // -------------------------
+      // Meta
+      // -------------------------
+
       const meta = document.createElement("div");
 
       meta.className = "ai-meta";
@@ -1491,29 +2415,100 @@ function renderAiChat() {
       meta.textContent =
           message.role === "user"
               ? "You"
-              : "Study Room AI";
+              : "🤖 Study Room AI";
+
+      // -------------------------
+      // Text
+      // -------------------------
 
       const text = document.createElement("div");
 
       text.className = "ai-text";
 
-      text.textContent = message.text;
+      text.innerHTML = renderAiMarkdown(
+          message.text || ""
+      );
 
       bubble.appendChild(meta);
 
       bubble.appendChild(text);
 
+      // -------------------------------------------------
+      // Assistant Actions
+      // -------------------------------------------------
+
+      if (message.role === "assistant") {
+
+          const actions = document.createElement("div");
+
+          actions.className = "ai-message-actions";
+
+          // -----------------
+          // Copy Button
+          // -----------------
+
+          const copyBtn = document.createElement("button");
+
+          copyBtn.type = "button";
+
+          copyBtn.className = "ai-copy-btn";
+
+          copyBtn.innerHTML = "📋 Copy";
+
+          copyBtn.addEventListener("click", async () => {
+
+              try {
+
+                  await navigator.clipboard.writeText(
+                      message.text || ""
+                  );
+
+                  copyBtn.innerHTML = "✅ Copied";
+
+                  setTimeout(() => {
+
+                      copyBtn.innerHTML = "📋 Copy";
+
+                  }, 1500);
+
+              }
+
+              catch {
+
+                  toast(
+                      "Unable to copy.",
+                      "warning"
+                  );
+
+              }
+
+          });
+
+          actions.appendChild(copyBtn);
+
+          bubble.appendChild(actions);
+
+      }
+
       aiChatStream.appendChild(bubble);
 
   });
 
-  aiChatStream.scrollTo({
+  // --------------------------------------------------------
+  // Auto Scroll
+  // --------------------------------------------------------
 
-      top: aiChatStream.scrollHeight,
+  if (shouldAutoScroll) {
 
-      behavior: "smooth"
+      aiChatStream.scrollTo({
 
-  });
+          top: aiChatStream.scrollHeight,
+
+          behavior: "smooth"
+
+      });
+
+  }
 
 }
 
@@ -1592,80 +2587,351 @@ function getFriendlyAiError(message) {
   return "❌ " + message;
 
 }
+
 // --------------------------------------------------------------------------
-// Ask Netlify AI
+// Build Lightweight AI Context
+// --------------------------------------------------------------------------
+
+function buildAIContext() {
+
+  if (!currentUser) {
+
+      return {
+
+          joinedRoom: false,
+
+          courseName: "Full Stack AI Engineer"
+
+      };
+
+  }
+
+  const now = Date.now();
+
+  const roomMinutes = Math.floor(
+
+      Math.max(
+          0,
+          now - getSessionRoomStartTimestamp(currentUser, now)
+      ) / 60000
+
+  );
+
+  const courseMinutes = currentUser.inCourse
+
+      ? Math.floor(
+
+          Math.max(
+              0,
+              now - getSessionCourseStartTimestamp(
+                  currentUser,
+                  getSessionRoomStartTimestamp(currentUser, now)
+              )
+          ) / 60000
+
+      )
+
+      : 0;
+
+  return {
+
+      studentName:
+          currentUser.name || "",
+
+      seatCode:
+          currentUser.code || "",
+
+      joinedRoom: true,
+
+      inCourse:
+          !!currentUser.inCourse,
+
+      handRaised:
+          !!currentUser.handRaised,
+
+      courseName:
+          currentUser.activeCourseName ||
+          "Full Stack AI Engineer",
+
+      roomMinutes,
+
+      courseMinutes,
+
+      status:
+          currentUser.status || "active"
+
+  };
+
+}
+
+// ==========================================================================
+// Handle Local AI Commands
+// ==========================================================================
+
+function handleLocalAICommand(input) {
+
+  const command = input.trim().toLowerCase();
+
+  switch (AI_LOCAL_COMMANDS[command]) {
+
+      case "help":
+
+          return `
+🤖 Study Room AI Commands
+
+/help
+Show this help menu.
+
+/clear
+Clear this conversation.
+
+/motivate
+Receive a coding motivation.
+
+/course
+Show today's course.
+
+/debug
+General debugging tips.
+
+/tips
+Study tips.
+
+/about
+About Study Room AI
+`;
+
+      case "motivate":
+
+          return `
+💪 Today's Motivation
+
+Every expert developer once searched Google for help.
+
+Every bug you fix makes you a better developer.
+
+Keep learning.
+Keep building.
+Never give up. 🚀
+`;
+
+      case "course":
+
+          return `
+📚 Current Course
+
+Full Stack AI Engineer
+
+Today's technologies include:
+
+• HTML
+• CSS
+• JavaScript
+• React
+• Next.js
+• MongoDB
+• Firebase
+• AI
+• Git & GitHub
+
+Happy coding! 😄
+`;
+
+      case "debug":
+
+          return `
+🐞 Debug Checklist
+
+✅ Read the error message.
+
+✅ Open DevTools (F12).
+
+✅ Check Console.
+
+✅ Check Network.
+
+✅ Verify Firebase data.
+
+✅ Use console.log().
+
+Small steps solve big bugs.
+`;
+
+      case "tips":
+
+          return `
+📖 Study Tips
+
+• Practice daily.
+
+• Build small projects.
+
+• Don't memorize—understand.
+
+• Read error messages carefully.
+
+• Ask questions.
+
+Consistency beats intensity.
+`;
+
+      case "about":
+
+          return `
+🎓 Study Room AI
+
+Built for the Full Stack AI Engineer course.
+
+Designed to help students learn programming, solve problems, and stay motivated.
+
+Powered by Gemini AI.
+`;
+
+      case "clear":
+
+          clearAiChat();
+
+          aiMessages.push({
+
+              role: "assistant",
+
+              text:
+`👋 Conversation cleared.
+
+Let's start a fresh learning session! 😄`
+
+          });
+
+          saveAiChat();
+
+          renderAiChat();
+
+          return "__CLEAR__";
+
+      default:
+
+          return null;
+
+  }
+
+}
+
+// --------------------------------------------------------------------------
+// Ask AI Server
 // --------------------------------------------------------------------------
 
 async function askAiOnServer(questionText, retry = 0) {
 
-  const controller = new AbortController();
+  // Cancel any previous unfinished request
+  if (aiAbortController) {
+      try {
+          aiAbortController.abort();
+      } catch (_) {}
+  }
+
+  aiAbortController = new AbortController();
 
   const timeout = setTimeout(() => {
 
-      controller.abort();
+      if (aiAbortController) {
+          aiAbortController.abort();
+      }
 
-  }, 25000);
+  }, AI_TIMEOUT);
 
   try {
+
+      const payload = {
+
+          message: questionText,
+
+          history: buildAiRequestHistory(),
+
+          context: buildAIContext()
+
+      };
 
       const response = await fetch(AI_ENDPOINT, {
 
           method: "POST",
 
           headers: {
+
               "Content-Type": "application/json"
+
           },
 
-          signal: controller.signal,
+          signal: aiAbortController.signal,
 
-          body: JSON.stringify({
-
-              message: questionText,
-
-              history: buildAiRequestHistory()
-
-          })
+          body: JSON.stringify(payload)
 
       });
 
       clearTimeout(timeout);
 
+      aiAbortController = null;
+
       const data = await response.json().catch(() => ({}));
 
-      // -------------------------
+      // ----------------------------------------------------
       // Success
-      // -------------------------
+      // ----------------------------------------------------
 
       if (response.ok) {
 
-          return data.reply ||
-              "Sorry, I couldn't generate a response.";
+          return (
+
+              data.reply ||
+
+              "Sorry, I couldn't generate a response."
+
+          );
 
       }
 
-      // -------------------------
-      // Retry once for temporary problems
-      // -------------------------
+      // ----------------------------------------------------
+      // Retry once for temporary errors
+      // ----------------------------------------------------
 
       if (
+
           retry < MAX_RETRY &&
+
           (
+
               response.status === 429 ||
+
               response.status === 500 ||
-              response.status === 503
+
+              response.status === 502 ||
+
+              response.status === 503 ||
+
+              response.status === 504
+
           )
+
       ) {
 
           await new Promise(resolve =>
+
               setTimeout(resolve, 2500)
+
           );
 
-          return askAiOnServer(
+          return await askAiOnServer(
+
               questionText,
+
               retry + 1
+
           );
 
       }
+
+      // ----------------------------------------------------
+      // Friendly server errors
+      // ----------------------------------------------------
 
       throw new Error(
 
@@ -1681,11 +2947,25 @@ async function askAiOnServer(questionText, retry = 0) {
 
       clearTimeout(timeout);
 
+      aiAbortController = null;
+
       if (error.name === "AbortError") {
+
+          throw error;
+
+      }
+
+      if (
+
+          error instanceof TypeError ||
+
+          String(error.message).includes("Failed to fetch")
+
+      ) {
 
           throw new Error(
 
-              "The AI took too long to respond."
+              "Unable to connect to the AI server. Please check your internet connection."
 
           );
 
@@ -1696,6 +2976,30 @@ async function askAiOnServer(questionText, retry = 0) {
   }
 
 }
+
+
+function stopAiGeneration() {
+
+  if (!aiGenerating) return;
+
+  aiAbortController?.abort();
+
+  aiAbortController = null;
+
+  aiGenerating = false;
+
+  setAiLoading(false);
+
+  toast(
+
+      "AI response cancelled.",
+
+      "info"
+
+  );
+
+}
+
 // --------------------------------------------------------------------------
 // Send Question
 // --------------------------------------------------------------------------
@@ -1704,28 +3008,162 @@ async function sendAiQuestion() {
 
   if (aiBusy) return;
 
-  const questionText = aiQuestionInput.value.trim();
+  // ------------------------------------------------------
+  // Validate Question
+  // ------------------------------------------------------
+
+  const validation = validateAIQuestion(
+      aiQuestionInput?.value
+  );
+
+  if (!validation.ok) {
+
+      toast(
+          validation.message,
+          "warning"
+      );
+
+      return;
+  }
+
+  const questionText = validation.text
+      .replace(/\s+/g, " ")
+      .trim();
+
+  // ------------------------------------------------------
+  // Prevent Empty Message
+  // ------------------------------------------------------
 
   if (!questionText) {
 
-      toast("Please type a question first.", "warning");
+      toast(
+          "Please type a question first.",
+          "warning"
+      );
 
       aiQuestionInput.focus();
 
       return;
-
   }
 
-  // Prevent duplicate consecutive questions
-  const last = aiMessages[aiMessages.length - 1];
+  // ------------------------------------------------------
+  // Rate Limiter
+  // ------------------------------------------------------
+
+  const limiter = canSendAIRequest();
+
+  if (!limiter.allowed) {
+
+      toast(
+          `Please wait ${Math.ceil(
+              limiter.remaining / 1000
+          )} second(s) before sending another question.`,
+          "warning"
+      );
+
+      return;
+  }
+
+  // ------------------------------------------------------
+  // Local Commands
+  // ------------------------------------------------------
+
+  const localReply =
+      handleLocalAICommand(questionText);
+
+  if (localReply !== null) {
+
+      aiQuestionInput.value = "";
+
+      if (localReply !== "__CLEAR__") {
+
+          aiMessages.push({
+
+              role: "user",
+
+              text: questionText
+
+          });
+
+          aiMessages.push({
+
+              role: "assistant",
+
+              text: localReply
+
+          });
+
+          trimAiHistory();
+
+          saveAiChat();
+
+          renderAiChat();
+
+      }
+
+      return;
+  }
+
+  // ------------------------------------------------------
+  // Prevent Duplicate Consecutive Questions
+  // ------------------------------------------------------
+
+  const last =
+      aiMessages[aiMessages.length - 1];
 
   if (
       last &&
       last.role === "user" &&
       last.text === questionText
   ) {
+
+      toast(
+          "You already asked that.",
+          "info"
+      );
+
       return;
   }
+
+  // ------------------------------------------------------
+  // Check Local Cache BEFORE contacting Gemini
+  // ------------------------------------------------------
+
+  const cachedReply =
+      getCachedAIAnswer(questionText);
+
+  if (cachedReply) {
+
+      aiMessages.push({
+
+          role: "user",
+
+          text: questionText
+
+      });
+
+      aiMessages.push({
+
+          role: "assistant",
+
+          text: cachedReply
+
+      });
+
+      trimAiHistory();
+
+      saveAiChat();
+
+      aiQuestionInput.value = "";
+
+      renderAiChat();
+
+      return;
+  }
+
+  // ------------------------------------------------------
+  // Add User Message
+  // ------------------------------------------------------
 
   aiMessages.push({
 
@@ -1735,62 +3173,151 @@ async function sendAiQuestion() {
 
   });
 
+  trimAiHistory();
+
+  saveAiChat();
+
   aiQuestionInput.value = "";
 
   renderAiChat();
+
+  // ------------------------------------------------------
+  // Show Thinking Bubble
+  // ------------------------------------------------------
 
   addThinkingBubble();
 
   setAiLoading(true);
 
   try {
+            // ------------------------------------------------------
+        // Ask Netlify AI
+        // ------------------------------------------------------
 
-      const reply = await askAiOnServer(questionText);
+        aiGenerating = true;
 
-      removeThinkingBubble();
+        const reply = await askAiOnServer(questionText);
 
-      aiMessages.push({
+        aiGenerating = false;
 
-          role: "assistant",
+        // ------------------------------------------------------
+        // Remove Thinking Bubble
+        // ------------------------------------------------------
 
-          text: reply
+        removeThinkingBubble();
 
-      });
+        // ------------------------------------------------------
+        // Save Reply To Local Cache
+        // ------------------------------------------------------
 
-      trimAiHistory();
+        cacheAIAnswer(
+            questionText,
+            reply
+        );
 
-      renderAiChat();
+        // ------------------------------------------------------
+        // Add Assistant Reply
+        // ------------------------------------------------------
 
-  }
+        aiMessages.push({
 
-  catch (error) {
+            role: "assistant",
 
-      removeThinkingBubble();
+            text: reply
 
-      aiMessages.push({
+        });
 
-          role: "assistant",
+        trimAiHistory();
 
-          text: getFriendlyAiError(error.message)
+        saveAiChat();
 
-      });
+        renderAiChat();
 
-      renderAiChat();
+    }
 
-      console.error("Study Room AI:", error);
+    catch (error) {
 
-  }
+        aiGenerating = false;
 
-  finally {
+        removeThinkingBubble();
 
-      setAiLoading(false);
+        // ------------------------------------------
+        // Request Cancelled
+        // ------------------------------------------
 
-      aiQuestionInput.focus();
+        if (error.name === "AbortError") {
 
-  }
+            renderAiChat();
+
+            return;
+
+        }
+
+        aiMessages.push({
+
+            role: "assistant",
+
+            text: getFriendlyAiError(
+                error.message
+            )
+
+        });
+
+        trimAiHistory();
+
+        saveAiChat();
+
+        renderAiChat();
+
+        console.error(
+            "Study Room AI:",
+            error
+        );
+
+    }
+
+    finally {
+
+        aiGenerating = false;
+
+        setAiLoading(false);
+
+        aiQuestionInput?.focus();
+
+    }
 
 }
 
+
+// ==========================================================================
+// Escape HTML
+// ==========================================================================
+
+function escapeHtml(text = "") {
+
+  const div = document.createElement("div");
+
+  div.textContent = text;
+
+  return div.innerHTML;
+
+}
+
+// ==========================================================================
+// Render AI Markdown
+// ==========================================================================
+
+function renderAiMarkdown(text) {
+
+  if (!window.marked) {
+
+      return escapeHtml(text);
+
+  }
+
+  return marked.parse(text);
+
+}
 // --------------------------------------------------------------------------
 // Button Events
 // --------------------------------------------------------------------------
@@ -1824,6 +3351,14 @@ btnClearAiChat?.addEventListener(
   "click",
 
   clearAiChat
+
+);
+
+btnStopAiGeneration?.addEventListener(
+
+  "click",
+
+  stopAiGeneration
 
 );
 
@@ -1872,6 +3407,29 @@ aiAssistantModalOverlay?.addEventListener(
   }
 
 );
+// --------------------------------------------------------------------------
+// Storage Health Check
+// --------------------------------------------------------------------------
+
+(function verifyAiStorage() {
+
+  try {
+
+      const raw = localStorage.getItem(getAiStorageKey());
+
+      if (!raw) return;
+
+      JSON.parse(raw);
+
+  }
+
+  catch {
+
+      localStorage.removeItem(getAiStorageKey());
+
+  }
+
+})();
 
 window.addEventListener(
 
@@ -1888,8 +3446,21 @@ window.addEventListener(
   }
 
 );  
+// --------------------------------------------------------------------------
+// Save chat before leaving page
+// --------------------------------------------------------------------------
 
+window.addEventListener("beforeunload", () => {
 
+  saveAiChat();
+
+});
+
+// --------------------------------------------------------------------------
+// Initialize Floating AI
+// --------------------------------------------------------------------------
+
+updateAiFloatingButton();
 
 
 
@@ -3848,6 +5419,19 @@ async function joinRoom(name, code, pin) {
   syncBestUsersSnapshotActionVisibility();
   renderLessonsUI();
   setTimeout(() => showCurrentUserRankCelebration().catch(() => {}), 1200);
+
+  // ----------------------------------------------------------
+// Unlock Study Room AI
+// ----------------------------------------------------------
+
+initializeStudentAI();
+
+
+if (!aiAssistantModalOverlay.classList.contains("hidden")) {
+
+    showStudentAI(getCurrentStudentName());
+
+}
 }
 
 
@@ -3983,6 +5567,12 @@ async function leaveRoom(auto = false, reason = "leave") {
     closeRankCelebrationModal();
     closeBestUsersHistoryModal();
     renderLessonsUI();
+
+    // ----------------------------------------------------------
+// Lock Study Room AI
+// ----------------------------------------------------------
+
+lockStudentAI();
   } finally {
     isSessionTeardownInProgress = false;
   }
@@ -5425,6 +7015,8 @@ async function bootstrapApplicationWorkspaceRuntime() {
       syncPersonalAccumulatedTime(currentUser.code);
       listenToActiveKicks(cacheUserId);
       listenToSeatLease(currentUser.code);
+
+      initializeStudentAI();
 
       const remainingTime = Math.max(0, currentUser.expiresAt - Date.now());
 
