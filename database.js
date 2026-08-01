@@ -1699,6 +1699,45 @@ function clearAiChatStorage() {
 }
 
 
+const AI_TIMEOUT = 30000; // 30 seconds
+
+function canSendAIRequest() {
+  const now = Date.now();
+  const elapsed = now - lastAiRequestTime;
+
+  if (elapsed < AI_MIN_REQUEST_INTERVAL) {
+    return {
+      allowed: false,
+      remaining: AI_MIN_REQUEST_INTERVAL - elapsed
+    };
+  }
+
+  lastAiRequestTime = now;
+  return {
+    allowed: true,
+    remaining: 0
+  };
+}
+
+function getCachedAIAnswer(questionText) {
+  const key = normalizeAIQuestion(String(questionText || ""));
+  const entry = aiCache[key];
+
+  if (!entry || typeof entry.answer !== "string") {
+    return null;
+  }
+
+  const updatedAt = Number(entry.updatedAt || 0);
+  const maxAgeMs = AI_CACHE_EXPIRE_DAYS * 24 * 60 * 60 * 1000;
+
+  if (!updatedAt || (Date.now() - updatedAt) > maxAgeMs) {
+    delete aiCache[key];
+    saveAiCache();
+    return null;
+  }
+
+  return entry.answer;
+}
 function loadAiCache() {
 
   try {
