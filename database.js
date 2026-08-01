@@ -1403,7 +1403,13 @@ const AI_LOCAL_COMMANDS = {
 
   "/tips": "tips",
 
-  "/about": "about"
+  "/about": "about",
+
+  "/rank": "rank",
+"/report": "report",
+"/latest": "latest",
+"/hand": "hand",
+"/course-now": "course-now"
 
 };
 // --------------------------------------------------------------------------
@@ -2640,9 +2646,122 @@ function buildAIContext() {
 
 }
 
+
+async function getLivePresenceMap() {
+  const [seatsSnap, onlineSnap] = await Promise.all([
+    db.ref("seats").get(),
+    db.ref("onlineUsers").get()
+  ]);
+
+  return mergePresenceMaps(
+    getPresenceMapFromSeatsSnapshot(seatsSnap.val() || {}),
+    getPresenceMapFromSeatsSnapshot(onlineSnap.val() || {})
+  );
+}
+
+function isStudyRoomFastQuestion(questionText = "") {
+  const q = String(questionText).trim().toLowerCase().replace(/\s+/g, " ");
+  return (
+    /(rank ?1|best user|top user|who is the best user|who is rank 1|best users snapshot)/.test(q) ||
+    /(current course|course now|course available now|course active|entered course|in course)/.test(q) ||
+    /(latest joined|last joined|who joined latest|latest in room|latest room join)/.test(q) ||
+    /(raised hand|who raised hand|hand raised|who is raising hand)/.test(q) ||
+    /(weekly report|this week report|week report|attendance report|report for this week|weekly summary)/.test(q)
+  );
+}
+
+async function buildStudyRoomFastAnswer(questionText = "") {
+  const q = String(questionText).trim().toLowerCase().replace(/\s+/g, " ");
+
+  // Rank #1 / best user snapshot
+  if (/(rank ?1|best user|top user|who is the best user|who is rank 1|best users snapshot)/.test(q)) {
+    try {
+      const report = window.__lastAttendanceReportData || await renderAttendanceReportModal({ silent: true });
+      const top = report?.topUsers?.[0];
+      if (top) {
+        return `🏆 Rank #1 is ${top.name} (Seat ${top.code}) with ${formatSessionDuration(top.totalMs || 0)}.`;
+      }
+    } catch (_) {}
+
+    try {
+      const { roomRank } = await computeCurrentWeekRoomRankData();
+      const top = roomRank?.[0];
+      if (top) {
+        return `🏆 Rank #1 is ${top.name} (Seat ${top.code}) with ${formatSessionDuration(top.totalMs || 0)}.`;
+      }
+    } catch (_) {}
+
+    return "I could not load the rank list right now.";
+  }
+
+  // Current course / available course
+  if (/(current course|course now|course available now|course active|entered course|in course)/.test(q)) {
+    const courseName = currentUser?.activeCourseName || "Full Stack AI Engineer";
+    if (currentUser?.inCourse) {
+      return `📚 Current course: ${courseName}. You are inside it now.`;
+    }
+    return `📚 Current course: ${courseName}. You are not entered into it right now.`;
+  }
+
+  // Latest joined room
+  if (/(latest joined|last joined|who joined latest|latest in room|latest room join)/.test(q)) {
+    try {
+      const presence = await getLivePresenceMap();
+      const liveUsers = Object.values(presence || {})
+        .filter(Boolean)
+        .sort((a, b) => getMostRecentPresenceTimestamp(b) - getMostRecentPresenceTimestamp(a));
+
+      const latest = liveUsers[0];
+      if (latest) {
+        const latestAt = getMostRecentPresenceTimestamp(latest) || Date.now();
+        return `⏱ Latest joined room: ${latest.name || "Unknown"} (Seat ${latest.code || "--"}) at ${formatAbsoluteDateTime(latestAt)}.`;
+      }
+    } catch (_) {}
+
+    return "I could not find the latest room join right now.";
+  }
+
+  // Raised hand
+  if (/(raised hand|who raised hand|hand raised|who is raising hand)/.test(q)) {
+    try {
+      const presence = await getLivePresenceMap();
+      const raised = Object.values(presence || {})
+        .filter(u => u && u.handRaised)
+        .sort((a, b) => (b.handRaisedAt || 0) - (a.handRaisedAt || 0));
+
+      if (!raised.length) {
+        return "✋ No one has raised a hand right now.";
+      }
+
+      const names = raised.slice(0, 5).map(u => `${u.name || "Unknown"} (Seat ${u.code || "--"})`);
+      const more = raised.length > 5 ? ` and ${raised.length - 5} more` : "";
+      return `✋ Raised hands now: ${names.join(", ")}${more}.`;
+    } catch (_) {}
+
+    return "I could not load raised-hand status right now.";
+  }
+
+  // Weekly report
+  if (/(weekly report|this week report|week report|attendance report|report for this week|weekly summary)/.test(q)) {
+    try {
+      const report = window.__lastAttendanceReportData || await renderAttendanceReportModal({ silent: true });
+      if (report) {
+        const top = report.topUsers?.[0];
+        return `📊 Weekly report: room time ${formatSessionDuration(report.totalRoomMs || 0)}, course time ${formatSessionDuration(report.totalCourseMs || 0)}, joins ${report.totalJoinEvents || 0}, course entered ${report.totalCourseEnterEvents || 0}, room left ${report.totalRoomLeaveEvents || 0}, course left ${report.totalCourseLeaveEvents || 0}${top ? `. Rank #1 is ${top.name} (Seat ${top.code})` : ""}.`;
+      }
+    } catch (_) {}
+
+    return "I could not load the weekly report right now.";
+  }
+
+  return null;
+}
+
 // ==========================================================================
 // Handle Local AI Commands
 // ==========================================================================
+
+
 
 function handleLocalAICommand(input) {
 
@@ -2690,6 +2809,13 @@ Keep learning.
 Keep building.
 Never give up. 🚀
 `;
+
+case "rank":
+  case "report":
+  case "latest":
+  case "hand":
+  case "course-now":
+      return "__USE_FAST_HELPER__";
 
       case "course":
 
@@ -2981,289 +3107,245 @@ function stopAiGeneration() {
 // --------------------------------------------------------------------------
 
 async function sendAiQuestion() {
-
   if (aiBusy) return;
 
   // ------------------------------------------------------
   // Validate Question
   // ------------------------------------------------------
-
-  const validation = validateAIQuestion(
-      aiQuestionInput?.value
-  );
+  const validation = validateAIQuestion(aiQuestionInput?.value);
 
   if (!validation.ok) {
-
-      toast(
-          validation.message,
-          "warning"
-      );
-
-      return;
+    toast(validation.message, "warning");
+    return;
   }
 
-  const questionText = validation.text
-      .replace(/\s+/g, " ")
-      .trim();
+  const questionText = validation.text.replace(/\s+/g, " ").trim();
 
   // ------------------------------------------------------
   // Prevent Empty Message
   // ------------------------------------------------------
-
   if (!questionText) {
-
-      toast(
-          "Please type a question first.",
-          "warning"
-      );
-
-      aiQuestionInput.focus();
-
-      return;
+    toast("Please type a question first.", "warning");
+    aiQuestionInput.focus();
+    return;
   }
 
   // ------------------------------------------------------
-  // Rate Limiter
+  // Fast Local Study-Room Answers
+  // These work even if Gemini quota is reached
   // ------------------------------------------------------
+  if (typeof buildStudyRoomFastAnswer === "function") {
+    try {
+      const fastReply = await buildStudyRoomFastAnswer(questionText);
+      if (fastReply) {
+        aiMessages.push({
+          role: "user",
+          text: questionText
+        });
 
-  const limiter = canSendAIRequest();
+        aiMessages.push({
+          role: "assistant",
+          text: fastReply
+        });
 
-  if (!limiter.allowed) {
+        trimAiHistory();
+        saveAiChat();
+        cacheAIAnswer(questionText, fastReply);
 
-      toast(
-          `Please wait ${Math.ceil(
-              limiter.remaining / 1000
-          )} second(s) before sending another question.`,
-          "warning"
-      );
-
-      return;
+        aiQuestionInput.value = "";
+        renderAiChat();
+        aiQuestionInput?.focus();
+        return;
+      }
+    } catch (error) {
+      console.warn("Fast local AI answer failed:", error);
+    }
   }
 
   // ------------------------------------------------------
   // Local Commands
   // ------------------------------------------------------
-
-  const localReply =
-      handleLocalAICommand(questionText);
+  const localReply = handleLocalAICommand(questionText);
 
   if (localReply !== null) {
+    aiQuestionInput.value = "";
 
-      aiQuestionInput.value = "";
+    if (localReply !== "__CLEAR__") {
+      aiMessages.push({
+        role: "user",
+        text: questionText
+      });
 
-      if (localReply !== "__CLEAR__") {
+      aiMessages.push({
+        role: "assistant",
+        text: localReply
+      });
 
-          aiMessages.push({
+      trimAiHistory();
+      saveAiChat();
+      renderAiChat();
+    }
 
-              role: "user",
-
-              text: questionText
-
-          });
-
-          aiMessages.push({
-
-              role: "assistant",
-
-              text: localReply
-
-          });
-
-          trimAiHistory();
-
-          saveAiChat();
-
-          renderAiChat();
-
-      }
-
-      return;
+    return;
   }
 
   // ------------------------------------------------------
   // Prevent Duplicate Consecutive Questions
   // ------------------------------------------------------
+  const last = aiMessages[aiMessages.length - 1];
 
-  const last =
-      aiMessages[aiMessages.length - 1];
-
-  if (
-      last &&
-      last.role === "user" &&
-      last.text === questionText
-  ) {
-
-      toast(
-          "You already asked that.",
-          "info"
-      );
-
-      return;
+  if (last && last.role === "user" && last.text === questionText) {
+    toast("You already asked that.", "info");
+    return;
   }
 
   // ------------------------------------------------------
   // Check Local Cache BEFORE contacting Gemini
   // ------------------------------------------------------
-
-  const cachedReply =
-      getCachedAIAnswer(questionText);
+  const cachedReply = getCachedAIAnswer(questionText);
 
   if (cachedReply) {
+    aiMessages.push({
+      role: "user",
+      text: questionText
+    });
 
-      aiMessages.push({
+    aiMessages.push({
+      role: "assistant",
+      text: cachedReply
+    });
 
-          role: "user",
+    trimAiHistory();
+    saveAiChat();
 
-          text: questionText
+    aiQuestionInput.value = "";
+    renderAiChat();
+    aiQuestionInput?.focus();
+    return;
+  }
 
-      });
+  // ------------------------------------------------------
+  // Rate Limiter (server questions only)
+  // ------------------------------------------------------
+  const limiter = canSendAIRequest();
 
-      aiMessages.push({
-
-          role: "assistant",
-
-          text: cachedReply
-
-      });
-
-      trimAiHistory();
-
-      saveAiChat();
-
-      aiQuestionInput.value = "";
-
-      renderAiChat();
-
-      return;
+  if (!limiter.allowed) {
+    toast(
+      `Please wait ${Math.ceil(limiter.remaining / 1000)} second(s) before sending another question.`,
+      "warning"
+    );
+    return;
   }
 
   // ------------------------------------------------------
   // Add User Message
   // ------------------------------------------------------
-
   aiMessages.push({
-
-      role: "user",
-
-      text: questionText
-
+    role: "user",
+    text: questionText
   });
 
   trimAiHistory();
-
   saveAiChat();
 
   aiQuestionInput.value = "";
-
   renderAiChat();
 
   // ------------------------------------------------------
   // Show Thinking Bubble
   // ------------------------------------------------------
-
   addThinkingBubble();
-
   setAiLoading(true);
 
   try {
-            // ------------------------------------------------------
-        // Ask Netlify AI
-        // ------------------------------------------------------
+    // ------------------------------------------------------
+    // Ask Netlify AI
+    // ------------------------------------------------------
+    aiGenerating = true;
 
-        aiGenerating = true;
+    const reply = await askAiOnServer(questionText);
 
-        const reply = await askAiOnServer(questionText);
+    aiGenerating = false;
 
-        aiGenerating = false;
+    // ------------------------------------------------------
+    // Remove Thinking Bubble
+    // ------------------------------------------------------
+    removeThinkingBubble();
 
-        // ------------------------------------------------------
-        // Remove Thinking Bubble
-        // ------------------------------------------------------
+    // ------------------------------------------------------
+    // Save Reply To Local Cache
+    // ------------------------------------------------------
+    cacheAIAnswer(questionText, reply);
 
-        removeThinkingBubble();
+    // ------------------------------------------------------
+    // Add Assistant Reply
+    // ------------------------------------------------------
+    aiMessages.push({
+      role: "assistant",
+      text: reply
+    });
 
-        // ------------------------------------------------------
-        // Save Reply To Local Cache
-        // ------------------------------------------------------
+    trimAiHistory();
+    saveAiChat();
+    renderAiChat();
+  } catch (error) {
+    aiGenerating = false;
+    removeThinkingBubble();
 
-        cacheAIAnswer(
-            questionText,
-            reply
-        );
+    // ------------------------------------------------------
+    // If server says quota/busy, try local fallback again
+    // ------------------------------------------------------
+    const errorText = String(error?.message || "").toLowerCase();
+    const quotaLike =
+      errorText.includes("quota") ||
+      errorText.includes("429") ||
+      errorText.includes("too many requests") ||
+      errorText.includes("temporarily busy");
 
-        // ------------------------------------------------------
-        // Add Assistant Reply
-        // ------------------------------------------------------
-
-        aiMessages.push({
-
+    if (quotaLike && typeof buildStudyRoomFastAnswer === "function") {
+      try {
+        const fallbackReply = await buildStudyRoomFastAnswer(questionText);
+        if (fallbackReply) {
+          aiMessages.push({
             role: "assistant",
+            text: fallbackReply
+          });
 
-            text: reply
-
-        });
-
-        trimAiHistory();
-
-        saveAiChat();
-
-        renderAiChat();
-
-    }
-
-    catch (error) {
-
-        aiGenerating = false;
-
-        removeThinkingBubble();
-
-        // ------------------------------------------
-        // Request Cancelled
-        // ------------------------------------------
-
-        if (error.name === "AbortError") {
-
-            renderAiChat();
-
-            return;
-
+          trimAiHistory();
+          saveAiChat();
+          cacheAIAnswer(questionText, fallbackReply);
+          renderAiChat();
+          return;
         }
-
-        aiMessages.push({
-
-            role: "assistant",
-
-            text: getFriendlyAiError(
-                error.message
-            )
-
-        });
-
-        trimAiHistory();
-
-        saveAiChat();
-
-        renderAiChat();
-
-        console.error(
-            "Study Room AI:",
-            error
-        );
-
+      } catch (fallbackError) {
+        console.warn("Fast fallback failed:", fallbackError);
+      }
     }
 
-    finally {
-
-        aiGenerating = false;
-
-        setAiLoading(false);
-
-        aiQuestionInput?.focus();
-
+    // ------------------------------------------------------
+    // Request Cancelled
+    // ------------------------------------------------------
+    if (error.name === "AbortError") {
+      renderAiChat();
+      return;
     }
 
+    aiMessages.push({
+      role: "assistant",
+      text: getFriendlyAiError(error.message)
+    });
+
+    trimAiHistory();
+    saveAiChat();
+    renderAiChat();
+
+    console.error("Study Room AI:", error);
+  } finally {
+    aiGenerating = false;
+    setAiLoading(false);
+    aiQuestionInput?.focus();
+  }
 }
-
 
 // ==========================================================================
 // Escape HTML
