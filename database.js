@@ -1277,6 +1277,184 @@ async function closeStalePresenceSession(seatData, leaseData = null) {
   return true;
 }
 
+
+
+
+// ==========================================================================
+// STUDY ROOM PRO AI — NETLIFY FUNCTION VERSION
+// ==========================================================================
+const aiFloatingBtn = document.getElementById("aiFloatingBtn");
+const aiAssistantModalOverlay = document.getElementById("aiAssistantModalOverlay");
+const closeAiAssistantModalBtn = document.getElementById("closeAiAssistantModalBtn");
+const aiQuestionInput = document.getElementById("aiQuestionInput");
+const aiChatStream = document.getElementById("aiChatStream");
+const btnSendAiQuestion = document.getElementById("btnSendAiQuestion");
+const btnClearAiChat = document.getElementById("btnClearAiChat");
+
+let aiMessages = [];
+let aiBusy = false;
+
+function openAiAssistantModal() {
+  if (!aiAssistantModalOverlay) return;
+
+  aiAssistantModalOverlay.classList.remove("hidden");
+
+  if (!aiMessages.length) {
+    aiMessages.push({
+      role: "assistant",
+      text:
+        "Hello 😄 I’m your Study Room Pro AI. Ask me about course updates, private/global messages, reports, top students, hand raises, or motivation."
+    });
+    renderAiChat();
+  }
+
+  setTimeout(() => {
+    aiQuestionInput?.focus();
+  }, 50);
+}
+
+function closeAiAssistantModal() {
+  aiAssistantModalOverlay?.classList.add("hidden");
+}
+
+function clearAiChat() {
+  aiMessages = [];
+  renderAiChat();
+}
+
+function renderAiChat() {
+  if (!aiChatStream) return;
+
+  aiChatStream.innerHTML = "";
+
+  if (!aiMessages.length) {
+    const emptyState = document.createElement("div");
+    emptyState.className = "ai-empty-state";
+    emptyState.textContent = "Start a conversation with the AI assistant.";
+    aiChatStream.appendChild(emptyState);
+    return;
+  }
+
+  aiMessages.forEach((msg) => {
+    const bubble = document.createElement("div");
+    bubble.className = `ai-bubble ai-bubble-${msg.role === "user" ? "user" : "bot"}`;
+
+    const meta = document.createElement("div");
+    meta.className = "ai-meta";
+    meta.textContent = msg.role === "user" ? "You" : "AI";
+
+    const text = document.createElement("div");
+    text.className = "ai-text";
+    text.textContent = msg.text;
+
+    bubble.appendChild(meta);
+    bubble.appendChild(text);
+    aiChatStream.appendChild(bubble);
+  });
+
+  aiChatStream.scrollTop = aiChatStream.scrollHeight;
+}
+
+function setAiLoading(state) {
+  aiBusy = state;
+  if (btnSendAiQuestion) btnSendAiQuestion.disabled = state;
+  if (btnClearAiChat) btnClearAiChat.disabled = state;
+  if (aiQuestionInput) aiQuestionInput.disabled = state;
+}
+
+function buildAiRequestHistory() {
+  return aiMessages
+    .filter((msg) => msg.text && msg.text !== "Thinking...")
+    .slice(-8)
+    .map((msg) => ({
+      role: msg.role,
+      text: msg.text
+    }));
+}
+
+async function askAiOnServer(questionText) {
+  const response = await fetch("/.netlify/functions/ai", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      message: questionText,
+      history: buildAiRequestHistory()
+    })
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data?.error || `AI request failed (${response.status})`);
+  }
+
+  return data.reply || "I could not read the AI reply properly.";
+}
+
+async function sendAiQuestion() {
+  if (aiBusy) return;
+
+  const questionText = (aiQuestionInput?.value || "").trim();
+  if (!questionText) {
+    toast("Type a question first.", "warning");
+    return;
+  }
+
+  aiMessages.push({ role: "user", text: questionText });
+  if (aiQuestionInput) aiQuestionInput.value = "";
+  renderAiChat();
+
+  aiMessages.push({ role: "assistant", text: "Thinking..." });
+  renderAiChat();
+  setAiLoading(true);
+
+  try {
+    const reply = await askAiOnServer(questionText);
+
+    if (aiMessages.length && aiMessages[aiMessages.length - 1].text === "Thinking...") {
+      aiMessages.pop();
+    }
+
+    aiMessages.push({ role: "assistant", text: reply });
+    renderAiChat();
+  } catch (err) {
+    if (aiMessages.length && aiMessages[aiMessages.length - 1].text === "Thinking...") {
+      aiMessages.pop();
+    }
+
+    aiMessages.push({
+      role: "assistant",
+      text: `Error: ${err.message || "Something went wrong."}`
+    });
+
+    renderAiChat();
+    toast("AI request failed.", "error");
+  } finally {
+    setAiLoading(false);
+  }
+}
+
+aiFloatingBtn?.addEventListener("click", openAiAssistantModal);
+closeAiAssistantModalBtn?.addEventListener("click", closeAiAssistantModal);
+btnSendAiQuestion?.addEventListener("click", sendAiQuestion);
+btnClearAiChat?.addEventListener("click", clearAiChat);
+
+aiQuestionInput?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendAiQuestion();
+  }
+});
+
+aiAssistantModalOverlay?.addEventListener("click", (e) => {
+  if (e.target === aiAssistantModalOverlay) closeAiAssistantModal();
+});
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeAiAssistantModal();
+});
 // ==========================================================================
 
 // SESSION MANAGEMENT TIMERS
