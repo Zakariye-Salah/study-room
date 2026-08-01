@@ -576,39 +576,48 @@
           ></textarea>
   
           <div class="ai-actions-row">
-
-            <button
-                id="btnSendAiQuestion"
-                class="action-btn primary-btn">
-        
-                <i class="bi bi-send"></i>
-        
-                Send
-        
+            <button id="btnSendAiQuestion" class="action-btn primary-btn" type="button">
+              <i class="bi bi-send"></i>
+              Send
             </button>
-        
-            <button
-                id="btnStopAiGeneration"
-                class="action-btn warning-btn"
-                style="display:none;">
-        
-                <i class="bi bi-stop-circle"></i>
-        
-                Stop
-        
+          
+            <button id="btnStopAiGeneration" class="action-btn warning-btn" type="button" style="display:none;">
+              <i class="bi bi-stop-circle"></i>
+              Stop
             </button>
-        
-            <button
-                id="btnClearAiChat"
-                class="action-btn neutral-btn">
-        
-                <i class="bi bi-trash"></i>
-        
-                Clear
-        
+          
+            <button id="btnLocalAiMode" class="action-btn neutral-btn" type="button">
+              <i class="bi bi-lightning-charge-fill"></i>
+              Local
             </button>
-        
-        </div>
+          
+            <button id="btnClearAiChat" class="action-btn neutral-btn" type="button">
+              <i class="bi bi-trash"></i>
+              Clear
+            </button>
+          </div>
+          
+          <div id="aiLocalQuestionsPanel" class="ai-local-questions-panel hidden">
+            <button type="button" class="ai-local-chip" data-question="Who is rank 1?">
+              <i class="bi bi-trophy-fill"></i> Rank 1
+            </button>
+          
+            <button type="button" class="ai-local-chip" data-question="Who is the latest joined the room?">
+              <i class="bi bi-clock-history"></i> Latest joined
+            </button>
+          
+            <button type="button" class="ai-local-chip" data-question="Who is in course now?">
+              <i class="bi bi-play-circle-fill"></i> In course now
+            </button>
+          
+            <button type="button" class="ai-local-chip" data-question="Who raised hand now?">
+              <i class="bi bi-hand-index-thumb-fill"></i> Raised hand
+            </button>
+          
+            <button type="button" class="ai-local-chip" data-question="Give me the weekly report">
+              <i class="bi bi-graph-up-arrow"></i> Weekly report
+            </button>
+          </div>
         </div>
       </div>
     </div>
