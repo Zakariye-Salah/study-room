@@ -1414,102 +1414,74 @@ const AI_LOCAL_COMMANDS = {
 // Locked AI HTML
 // --------------------------------------------------------------------------
 
+// 1) Replace AI_LOCKED_HTML
 const AI_LOCKED_HTML = `
 <div class="ai-locked-screen">
+  <div class="ai-lock-icon">
+    <i class="bi bi-shield-lock-fill"></i>
+  </div>
 
-    <div class="ai-lock-icon">
-        🔒
-    </div>
+  <h2>Study Room Pro AI</h2>
 
-    <h2>Study Room Pro AI</h2>
+  <p class="ai-lock-description">
+    <i class="bi bi-stars"></i>
+    Welcome to <strong>Study Room Pro AI</strong>.
+    <br><br>
+    <i class="bi bi-lock-fill"></i>
+    The AI Assistant is available only for students who have joined today's study room.
+    <br><br>
+    <i class="bi bi-box-arrow-in-right"></i>
+    Please take your seat first to unlock all AI features.
+  </p>
 
-    <p class="ai-lock-description">
+  <div class="ai-course-list">
+    <div><i class="bi bi-code-slash"></i><span>HTML & CSS</span></div>
+    <div><i class="bi bi-filetype-js"></i><span>JavaScript</span></div>
+    <div><i class="bi bi-braces"></i><span>React</span></div>
+    <div><i class="bi bi-window-stack"></i><span>Next.js</span></div>
+    <div><i class="bi bi-database-fill"></i><span>MongoDB</span></div>
+    <div><i class="bi bi-lightning-charge-fill"></i><span>Firebase</span></div>
+    <div><i class="bi bi-cpu-fill"></i><span>AI & Prompt Engineering</span></div>
+    <div><i class="bi bi-bug-fill"></i><span>Debugging</span></div>
+    <div><i class="bi bi-question-circle-fill"></i><span>Project Help</span></div>
+    <div><i class="bi bi-emoji-smile-fill"></i><span>Motivation</span></div>
+  </div>
 
-        👋 Hello!
+  <div class="ai-lock-buttons">
+    <button id="btnAiTakeSeat" class="ai-lock-btn ai-lock-primary" type="button">
+      <i class="bi bi-person-check-fill"></i>
+      <span>Take My Seat</span>
+      <span class="ai-btn-loader hidden" aria-hidden="true"></span>
+    </button>
 
-        <br><br>
-
-        Welcome to <strong>Study Room Pro AI</strong>.
-
-        <br><br>
-
-        The AI Assistant is available only for students who have joined today's study room.
-
-        <br><br>
-
-        Please take your seat first to unlock all AI features.
-
-    </p>
-
-    <div class="ai-course-list">
-
-        <div>✅ HTML & CSS</div>
-
-        <div>✅ JavaScript</div>
-
-        <div>✅ React</div>
-
-        <div>✅ Next.js</div>
-
-        <div>✅ MongoDB</div>
-
-        <div>✅ Firebase</div>
-
-        <div>✅ AI & Prompt Engineering</div>
-
-        <div>✅ Debugging</div>
-
-        <div>✅ Project Help</div>
-
-        <div>✅ Motivation 😄</div>
-
-    </div>
-
-    <div class="ai-lock-buttons">
-
-        <button
-            id="btnAiTakeSeat"
-            class="action-btn primary-btn"
-            type="button">
-
-            🎓 Take My Seat
-
-        </button>
-
-        <button
-            id="btnAiLater"
-            class="action-btn neutral-btn"
-            type="button">
-
-            Maybe Later
-
-        </button>
-
-    </div>
-
+    <button id="btnAiLater" class="ai-lock-btn ai-lock-secondary" type="button">
+      <i class="bi bi-clock-history"></i>
+      <span>Maybe Later</span>
+    </button>
+  </div>
 </div>
 `;
+// 2) Replace AI_WELCOME
 
 const AI_WELCOME = `
 👋 Welcome to Study Room Pro AI!
 
 I can help you with:
 
-💻 HTML
-🎨 CSS
-⚡ JavaScript
-⚛ React
-▲ Next.js
-🍃 MongoDB
-🔥 Firebase
-🤖 AI
-🐙 Git & GitHub
+<i class="bi bi-code-slash"></i> HTML  
+<i class="bi bi-palette-fill"></i> CSS  
+<i class="bi bi-filetype-js"></i> JavaScript  
+<i class="bi bi-braces"></i> React  
+<i class="bi bi-window-stack"></i> Next.js  
+<i class="bi bi-database-fill"></i> MongoDB  
+<i class="bi bi-lightning-charge-fill"></i> Firebase  
+<i class="bi bi-cpu-fill"></i> AI  
+<i class="bi bi-github"></i> Git & GitHub
 
 I can also help explain lessons, debug code, write announcements, and keep you motivated.
 
 Ask me anything 😄
 `.trim();
-
 // --------------------------------------------------------------------------
 // Local Storage Helpers
 // --------------------------------------------------------------------------
@@ -1932,65 +1904,54 @@ function validateAIQuestion(question) {
 // --------------------------------------------------------------------------
 
 function showLockedAI() {
-
   aiChatStream.innerHTML = AI_LOCKED_HTML;
 
-  document.querySelector(".ai-input-box").style.display = "none";
+  const inputBox = document.querySelector(".ai-input-box");
+  if (inputBox) inputBox.style.display = "none";
 
   aiChatStream.scrollTop = 0;
 
   const seatBtn = document.getElementById("btnAiTakeSeat");
-
   const laterBtn = document.getElementById("btnAiLater");
 
-  seatBtn?.addEventListener("click", () => {
+  seatBtn?.addEventListener("click", async () => {
+    const loader = seatBtn.querySelector(".ai-btn-loader");
+    seatBtn.disabled = true;
+    laterBtn && (laterBtn.disabled = true);
+    if (loader) loader.classList.remove("hidden");
 
+    try {
       closeAiAssistantModal();
 
-      // -------------------------------------------------
-      // Open your Take Seat modal here
-      // -------------------------------------------------
-
       if (typeof openSeatModal === "function") {
-
-          openSeatModal();
-
-          return;
-
+        openSeatModal();
+      } else if (typeof showTakeSeatModal === "function") {
+        showTakeSeatModal();
+      } else if (typeof openTakeSeatModal === "function") {
+        openTakeSeatModal();
       }
 
-      if (typeof showTakeSeatModal === "function") {
+      // auto-click the claim button if it exists
+      setTimeout(() => {
+        const claimBtn =
+          document.getElementById("claimSeatSpaceBtn") ||
+          document.getElementById("btnClaimSeatSpace") ||
+          document.querySelector('[data-action="claim-seat"]');
 
-          showTakeSeatModal();
-
-          return;
-
-      }
-
-      if (typeof openTakeSeatModal === "function") {
-
-          openTakeSeatModal();
-
-          return;
-
-      }
-
-      toast(
-
-          "Please click Take Seat first.",
-
-          "warning"
-
-      );
-
+        if (claimBtn && !claimBtn.disabled) {
+          claimBtn.click();
+        }
+      }, 250);
+    } finally {
+      if (loader) loader.classList.add("hidden");
+      seatBtn.disabled = false;
+      if (laterBtn) laterBtn.disabled = false;
+    }
   });
 
   laterBtn?.addEventListener("click", () => {
-
-      closeAiAssistantModal();
-
+    closeAiAssistantModal();
   });
-
 }
 
 // --------------------------------------------------------------------------
@@ -2396,159 +2357,81 @@ function clearAiChat() {
 // ==========================================================================
 // Render AI Chat
 // ==========================================================================
+// 4) Replace renderAiChat()
 function renderAiChat() {
-
   if (!aiChatStream) return;
 
-  // Remember scroll position
   const shouldAutoScroll =
-      aiChatStream.scrollTop +
-      aiChatStream.clientHeight >=
-      aiChatStream.scrollHeight - 120;
+    aiChatStream.scrollTop + aiChatStream.clientHeight >=
+    aiChatStream.scrollHeight - 120;
 
   aiChatStream.innerHTML = "";
 
-  // --------------------------------------------------------
-  // Empty State
-  // --------------------------------------------------------
-
   if (!aiMessages.length) {
-
-      const empty = document.createElement("div");
-
-      empty.className = "ai-empty-state";
-
-      empty.innerHTML = `
-          <h4>🤖 Study Room Pro AI</h4>
-          <p>Start chatting with your AI learning assistant.</p>
-      `;
-
-      aiChatStream.appendChild(empty);
-
-      return;
-
+    const empty = document.createElement("div");
+    empty.className = "ai-empty-state";
+    empty.innerHTML = `
+      <h4><i class="bi bi-stars"></i> Study Room Pro AI</h4>
+      <p>Start chatting with your AI learning assistant.</p>
+    `;
+    aiChatStream.appendChild(empty);
+    return;
   }
-
-  // --------------------------------------------------------
-  // Render Messages
-  // --------------------------------------------------------
 
   aiMessages.forEach((message) => {
+    const bubble = document.createElement("div");
+    bubble.className =
+      "ai-bubble ai-bubble-" +
+      (message.role === "user" ? "user" : "bot");
 
-      const bubble = document.createElement("div");
+    const meta = document.createElement("div");
+    meta.className = "ai-meta";
+    meta.innerHTML =
+      message.role === "user"
+        ? `<i class="bi bi-person-fill"></i> You`
+        : `<i class="bi bi-robot"></i> Study Room AI`;
 
-      bubble.className =
-          "ai-bubble ai-bubble-" +
-          (message.role === "user"
-              ? "user"
-              : "bot");
+    const text = document.createElement("div");
+    text.className = "ai-text";
+    text.innerHTML = renderAiMarkdown(message.text || "");
 
-      // -------------------------
-      // Meta
-      // -------------------------
+    bubble.appendChild(meta);
+    bubble.appendChild(text);
 
-      const meta = document.createElement("div");
+    if (message.role === "assistant") {
+      const actions = document.createElement("div");
+      actions.className = "ai-message-actions";
 
-      meta.className = "ai-meta";
+      const copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.className = "ai-copy-btn";
+      copyBtn.innerHTML = `<i class="bi bi-copy"></i><span>Copy</span>`;
 
-      meta.textContent =
-          message.role === "user"
-              ? "You"
-              : "🤖 Study Room AI";
-
-      // -------------------------
-      // Text
-      // -------------------------
-
-      const text = document.createElement("div");
-
-      text.className = "ai-text";
-
-      text.innerHTML = renderAiMarkdown(
-          message.text || ""
-      );
-
-      bubble.appendChild(meta);
-
-      bubble.appendChild(text);
-
-      // -------------------------------------------------
-      // Assistant Actions
-      // -------------------------------------------------
-
-      if (message.role === "assistant") {
-
-          const actions = document.createElement("div");
-
-          actions.className = "ai-message-actions";
-
-          // -----------------
-          // Copy Button
-          // -----------------
-
-          const copyBtn = document.createElement("button");
-
-          copyBtn.type = "button";
-
-          copyBtn.className = "ai-copy-btn";
-
-          copyBtn.innerHTML = "📋 Copy";
-
-          copyBtn.addEventListener("click", async () => {
-
-              try {
-
-                  await navigator.clipboard.writeText(
-                      message.text || ""
-                  );
-
-                  copyBtn.innerHTML = "✅ Copied";
-
-                  setTimeout(() => {
-
-                      copyBtn.innerHTML = "📋 Copy";
-
-                  }, 1500);
-
-              }
-
-              catch {
-
-                  toast(
-                      "Unable to copy.",
-                      "warning"
-                  );
-
-              }
-
-          });
-
-          actions.appendChild(copyBtn);
-
-          bubble.appendChild(actions);
-
-      }
-
-      aiChatStream.appendChild(bubble);
-
-  });
-
-  // --------------------------------------------------------
-  // Auto Scroll
-  // --------------------------------------------------------
-
-  if (shouldAutoScroll) {
-
-      aiChatStream.scrollTo({
-
-          top: aiChatStream.scrollHeight,
-
-          behavior: "smooth"
-
+      copyBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(message.text || "");
+          copyBtn.innerHTML = `<i class="bi bi-check2-circle"></i><span>Copied</span>`;
+          setTimeout(() => {
+            copyBtn.innerHTML = `<i class="bi bi-copy"></i><span>Copy</span>`;
+          }, 1500);
+        } catch {
+          toast("Unable to copy.", "warning");
+        }
       });
 
-  }
+      actions.appendChild(copyBtn);
+      bubble.appendChild(actions);
+    }
 
+    aiChatStream.appendChild(bubble);
+  });
+
+  if (shouldAutoScroll) {
+    aiChatStream.scrollTo({
+      top: aiChatStream.scrollHeight,
+      behavior: "smooth"
+    });
+  }
 }
 
 // --------------------------------------------------------------------------
