@@ -222,6 +222,8 @@ exports.handler = async (event) => {
       ? body.history
       : [];
 
+      const context = body.context || {};
+
     if (!question) {
       return {
         statusCode: 400,
@@ -246,6 +248,27 @@ exports.handler = async (event) => {
       };
     }
 
+    const contextPrompt = `
+
+Current Study Room Information:
+
+Student Name: ${context.studentName || "Unknown"}
+
+Seat: ${context.seatCode || "Unknown"}
+
+Course: ${context.courseName || "Full Stack AI Engineer"}
+
+Joined Room: ${context.inCourse ? "Yes" : "No"}
+
+Hand Raised: ${context.handRaised ? "Yes" : "No"}
+
+Online: ${context.online ? "Yes" : "No"}
+
+Use this information only if it helps answer the student's question.
+Never invent missing information.
+
+`;
+
     // -------------------------------------------------------------------------
     // Keep only the last few messages to reduce token usage
     // -------------------------------------------------------------------------
@@ -261,14 +284,24 @@ exports.handler = async (event) => {
         ]
       }));
 
-    conversation.push({
-      role: "user",
-      parts: [
-        {
-          text: question
-        }
-      ]
+      conversation.push({
+
+        role: "user",
+    
+        parts: [
+    
+            {
+    
+                text: contextPrompt + "\n\nStudent Question:\n" + question
+    
+            }
+    
+        ]
+    
     });
+
+
+
 
     // -------------------------------------------------------------------------
     // Build Gemini Request
