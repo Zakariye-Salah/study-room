@@ -550,6 +550,43 @@
     </div>
   </div>
 
-  <script src="database.js"></script>
+  <button id="aiFloatingBtn" class="ai-floating-btn" type="button" aria-label="Open AI Assistant">
+    <i class="bi bi-chat-dots-fill"></i>
+  </button>
+  
+  <div id="aiAssistantModalOverlay" class="modal-blur-overlay hidden ai-modal-overlay">
+    <div class="modal-window scale-animation ai-modal-window">
+      <div class="modal-header">
+        <h3><i class="bi bi-stars text-primary"></i> Study Room Pro AI</h3>
+        <button id="closeAiAssistantModalBtn" class="modal-close-x">&times;</button>
+      </div>
+  
+      <div class="modal-body ai-modal-body">
+        <p class="ai-help-text">
+          Friendly helper for course updates, reports, private/global messages, top students, hand raises, and motivation.
+        </p>
+  
+        <div id="aiChatStream" class="ai-chat-stream"></div>
+  
+        <div class="ai-input-box">
+          <textarea
+            id="aiQuestionInput"
+            rows="3"
+            placeholder="Ask something about the course room..."
+          ></textarea>
+  
+          <div class="ai-actions-row">
+            <button id="btnSendAiQuestion" class="action-btn primary-btn" type="button">
+              <i class="bi bi-send"></i> Send
+            </button>
+            <button id="btnClearAiChat" class="action-btn neutral-btn" type="button">
+              <i class="bi bi-trash"></i> Clear
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="database.js" defer></script>
 </body>
 </html>
