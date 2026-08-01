@@ -1313,6 +1313,76 @@ let aiCacheLoaded = false;
 let aiAbortController = null;
 
 let aiGenerating = false;
+
+
+let aiLocalMode = false;
+
+function setAiLocalMode(enabled) {
+  aiLocalMode = !!enabled;
+
+  const localBtn = document.getElementById("btnLocalAiMode");
+  const panel = document.getElementById("aiLocalQuestionsPanel");
+
+  if (localBtn) {
+    localBtn.classList.toggle("ai-mode-active", aiLocalMode);
+    localBtn.innerHTML = aiLocalMode
+      ? '<i class="bi bi-lightning-charge-fill"></i> Local On'
+      : '<i class="bi bi-lightning-charge-fill"></i> Local';
+  }
+
+  if (panel) {
+    panel.classList.toggle("hidden", !aiLocalMode);
+  }
+}
+
+async function sendLocalStudyRoomQuestion(questionText) {
+  const text = String(questionText || "").trim();
+  if (!text) return;
+
+  const fastReply =
+    typeof buildStudyRoomFastAnswer === "function"
+      ? await buildStudyRoomFastAnswer(text)
+      : null;
+
+  let reply = fastReply;
+
+  if (!reply && typeof handleLocalAICommand === "function") {
+    const localReply = handleLocalAICommand(text);
+    if (localReply && localReply !== "__CLEAR__") {
+      reply = localReply;
+    }
+  }
+
+  if (!reply && typeof getCachedAIAnswer === "function") {
+    reply = getCachedAIAnswer(text);
+  }
+
+  if (!reply) {
+    reply =
+      "I can answer this in Local mode only when the app has that room data available.";
+  }
+
+  aiMessages.push({ role: "user", text });
+  aiMessages.push({ role: "assistant", text: reply });
+
+  trimAiHistory();
+  saveAiChat();
+  renderAiChat();
+  aiQuestionInput.value = "";
+  aiQuestionInput?.focus();
+}
+
+document.getElementById("btnLocalAiMode")?.addEventListener("click", () => {
+  setAiLocalMode(!aiLocalMode);
+});
+
+document.getElementById("aiLocalQuestionsPanel")?.addEventListener("click", (e) => {
+  const chip = e.target.closest(".ai-local-chip");
+  if (!chip) return;
+  const q = chip.getAttribute("data-question") || "";
+  aiQuestionInput.value = q;
+  sendLocalStudyRoomQuestion(q);
+});
 // --------------------------------------------------------------------------
 // Configuration
 // --------------------------------------------------------------------------
@@ -3109,11 +3179,7 @@ function stopAiGeneration() {
 async function sendAiQuestion() {
   if (aiBusy) return;
 
-  // ------------------------------------------------------
-  // Validate Question
-  // ------------------------------------------------------
   const validation = validateAIQuestion(aiQuestionInput?.value);
-
   if (!validation.ok) {
     toast(validation.message, "warning");
     return;
@@ -3121,37 +3187,28 @@ async function sendAiQuestion() {
 
   const questionText = validation.text.replace(/\s+/g, " ").trim();
 
-  // ------------------------------------------------------
-  // Prevent Empty Message
-  // ------------------------------------------------------
   if (!questionText) {
     toast("Please type a question first.", "warning");
     aiQuestionInput.focus();
     return;
   }
 
-  // ------------------------------------------------------
-  // Fast Local Study-Room Answers
-  // These work even if Gemini quota is reached
-  // ------------------------------------------------------
+  // Local mode always stays local
+  if (aiLocalMode) {
+    await sendLocalStudyRoomQuestion(questionText);
+    return;
+  }
+
+  // Also auto-handle fast room questions before Gemini
   if (typeof buildStudyRoomFastAnswer === "function") {
     try {
       const fastReply = await buildStudyRoomFastAnswer(questionText);
       if (fastReply) {
-        aiMessages.push({
-          role: "user",
-          text: questionText
-        });
-
-        aiMessages.push({
-          role: "assistant",
-          text: fastReply
-        });
-
+        aiMessages.push({ role: "user", text: questionText });
+        aiMessages.push({ role: "assistant", text: fastReply });
         trimAiHistory();
         saveAiChat();
         cacheAIAnswer(questionText, fastReply);
-
         aiQuestionInput.value = "";
         renderAiChat();
         aiQuestionInput?.focus();
@@ -3162,25 +3219,13 @@ async function sendAiQuestion() {
     }
   }
 
-  // ------------------------------------------------------
-  // Local Commands
-  // ------------------------------------------------------
   const localReply = handleLocalAICommand(questionText);
-
   if (localReply !== null) {
     aiQuestionInput.value = "";
 
     if (localReply !== "__CLEAR__") {
-      aiMessages.push({
-        role: "user",
-        text: questionText
-      });
-
-      aiMessages.push({
-        role: "assistant",
-        text: localReply
-      });
-
+      aiMessages.push({ role: "user", text: questionText });
+      aiMessages.push({ role: "assistant", text: localReply });
       trimAiHistory();
       saveAiChat();
       renderAiChat();
@@ -3189,46 +3234,24 @@ async function sendAiQuestion() {
     return;
   }
 
-  // ------------------------------------------------------
-  // Prevent Duplicate Consecutive Questions
-  // ------------------------------------------------------
   const last = aiMessages[aiMessages.length - 1];
-
   if (last && last.role === "user" && last.text === questionText) {
     toast("You already asked that.", "info");
     return;
   }
 
-  // ------------------------------------------------------
-  // Check Local Cache BEFORE contacting Gemini
-  // ------------------------------------------------------
   const cachedReply = getCachedAIAnswer(questionText);
-
   if (cachedReply) {
-    aiMessages.push({
-      role: "user",
-      text: questionText
-    });
-
-    aiMessages.push({
-      role: "assistant",
-      text: cachedReply
-    });
-
+    aiMessages.push({ role: "user", text: questionText });
+    aiMessages.push({ role: "assistant", text: cachedReply });
     trimAiHistory();
     saveAiChat();
-
     aiQuestionInput.value = "";
     renderAiChat();
-    aiQuestionInput?.focus();
     return;
   }
 
-  // ------------------------------------------------------
-  // Rate Limiter (server questions only)
-  // ------------------------------------------------------
   const limiter = canSendAIRequest();
-
   if (!limiter.allowed) {
     toast(
       `Please wait ${Math.ceil(limiter.remaining / 1000)} second(s) before sending another question.`,
@@ -3237,54 +3260,24 @@ async function sendAiQuestion() {
     return;
   }
 
-  // ------------------------------------------------------
-  // Add User Message
-  // ------------------------------------------------------
-  aiMessages.push({
-    role: "user",
-    text: questionText
-  });
-
+  aiMessages.push({ role: "user", text: questionText });
   trimAiHistory();
   saveAiChat();
-
   aiQuestionInput.value = "";
   renderAiChat();
 
-  // ------------------------------------------------------
-  // Show Thinking Bubble
-  // ------------------------------------------------------
   addThinkingBubble();
   setAiLoading(true);
 
   try {
-    // ------------------------------------------------------
-    // Ask Netlify AI
-    // ------------------------------------------------------
     aiGenerating = true;
-
     const reply = await askAiOnServer(questionText);
-
     aiGenerating = false;
 
-    // ------------------------------------------------------
-    // Remove Thinking Bubble
-    // ------------------------------------------------------
     removeThinkingBubble();
-
-    // ------------------------------------------------------
-    // Save Reply To Local Cache
-    // ------------------------------------------------------
     cacheAIAnswer(questionText, reply);
 
-    // ------------------------------------------------------
-    // Add Assistant Reply
-    // ------------------------------------------------------
-    aiMessages.push({
-      role: "assistant",
-      text: reply
-    });
-
+    aiMessages.push({ role: "assistant", text: reply });
     trimAiHistory();
     saveAiChat();
     renderAiChat();
@@ -3292,9 +3285,6 @@ async function sendAiQuestion() {
     aiGenerating = false;
     removeThinkingBubble();
 
-    // ------------------------------------------------------
-    // If server says quota/busy, try local fallback again
-    // ------------------------------------------------------
     const errorText = String(error?.message || "").toLowerCase();
     const quotaLike =
       errorText.includes("quota") ||
@@ -3306,11 +3296,7 @@ async function sendAiQuestion() {
       try {
         const fallbackReply = await buildStudyRoomFastAnswer(questionText);
         if (fallbackReply) {
-          aiMessages.push({
-            role: "assistant",
-            text: fallbackReply
-          });
-
+          aiMessages.push({ role: "assistant", text: fallbackReply });
           trimAiHistory();
           saveAiChat();
           cacheAIAnswer(questionText, fallbackReply);
@@ -3322,9 +3308,6 @@ async function sendAiQuestion() {
       }
     }
 
-    // ------------------------------------------------------
-    // Request Cancelled
-    // ------------------------------------------------------
     if (error.name === "AbortError") {
       renderAiChat();
       return;
