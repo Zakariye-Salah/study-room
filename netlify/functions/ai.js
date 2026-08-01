@@ -3,7 +3,7 @@
 // Netlify Function
 // ============================================================================
 
-const MODEL = "gemini-2.5-flash-lite";
+const MODEL = "gemini-2.0-flash";
 const SYSTEM_PROMPT = `
 You are Study Room Pro AI.
 
