@@ -4206,7 +4206,6 @@ function initRealtimeDatabaseListeners() {
       let badgeHtml = "";
       if (u.inCourse) {
         const pathTime = u.courseEnteredAt ? formatAbsoluteDateTime(getSessionCourseStartTimestamp(u)) : "";
-        badgeHtml = `<span class="in-course-indicator-tag in-course-danger-tag"><i class="bi bi-mortarboard-fill"></i> ${u.activeCourseName || 'In Course'} (${pathTime})</span>`;
       }
 
       const isCurrentUserCard = currentUser && currentUser.id === u.id;
