@@ -1299,11 +1299,18 @@ const aiChatStream = document.getElementById("aiChatStream");
 const btnSendAiQuestion = document.getElementById("btnSendAiQuestion");
 const btnClearAiChat = document.getElementById("btnClearAiChat");
 
+
+
+let localAiBusy = false;
+let localAiActionLockUntil = 0;
+const LOCAL_AI_ACTION_LOCK_MS = 1500;
+
 const btnStopAiGeneration =
     document.getElementById(
         "btnStopAiGeneration"
     );
 let aiCacheLoaded = false;
+
 
 
 // ==========================================================================
@@ -1316,6 +1323,113 @@ let aiGenerating = false;
 
 
 let aiLocalMode = false;
+
+
+
+document.getElementById("btnLocalAiMode")?.addEventListener("click", () => {
+  setAiLocalMode(!aiLocalMode);
+});
+
+document.getElementById("aiLocalQuestionsPanel")?.addEventListener("click", async (e) => {
+  const pageBtn = e.target.closest(".ai-local-page-btn, .ai-local-page-num");
+  if (pageBtn) {
+    const page = Number(pageBtn.getAttribute("data-page") || "1");
+    renderAiLocalQuestionsPanel(page);
+    return;
+  }
+
+  const chip = e.target.closest(".ai-local-chip");
+  if (!chip) return;
+  if (chip.classList.contains("is-loading")) return;
+
+  const q = chip.getAttribute("data-question") || "";
+  aiQuestionInput.value = q;
+  await sendLocalStudyRoomQuestion(q, chip);
+});
+// --------------------------------------------------------------------------
+// Configuration
+// --------------------------------------------------------------------------
+
+const AI_ENDPOINT = "/.netlify/functions/ai";
+
+// Only keep the latest conversation for Gemini
+const MAX_HISTORY = 2;
+// Maximum messages stored locally
+const MAX_LOCAL_MESSAGES = 60;
+
+// Retry only once
+const MAX_RETRY = 0;
+
+
+const LOCAL_AI_PAGE_SIZE = 5;
+let currentLocalAiPage = 1;
+
+const LOCAL_AI_QUESTIONS = [
+  { q: "Who is rank 1?", icon: "bi-trophy-fill", label: "Rank 1" },
+  { q: "Who is the latest joined the room?", icon: "bi-clock-history", label: "Latest joined" },
+  { q: "Who is in course now?", icon: "bi-play-circle-fill", label: "In course now" },
+  { q: "Who raised hand now?", icon: "bi-hand-index-thumb-fill", label: "Raised hand" },
+  { q: "Give me the weekly report", icon: "bi-graph-up-arrow", label: "Weekly report" },
+
+  { q: "Enter the course if available", icon: "bi-door-open-fill", label: "Enter course" },
+  { q: "Who can enter the course now?", icon: "bi-person-check-fill", label: "Course access" },
+  { q: "Who left the room recently?", icon: "bi-box-arrow-left", label: "Left room" },
+  { q: "Change the PIN for this room", icon: "bi-key-fill", label: "Change PIN" },
+  { q: "Raise motivation for the students", icon: "bi-lightning-charge-fill", label: "Motivation" },
+
+  { q: "Send a message to online users", icon: "bi-send-fill", label: "Message online" },
+  { q: "Show online students now", icon: "bi-people-fill", label: "Online students" }
+];
+
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getLocalAiPageCount() {
+  return Math.max(1, Math.ceil(LOCAL_AI_QUESTIONS.length / LOCAL_AI_PAGE_SIZE));
+}
+
+function renderAiLocalQuestionsPanel(page = 1) {
+  const panel = document.getElementById("aiLocalQuestionsPanel");
+  if (!panel) return;
+
+  const totalPages = getLocalAiPageCount();
+  currentLocalAiPage = Math.min(Math.max(1, page), totalPages);
+
+  const start = (currentLocalAiPage - 1) * LOCAL_AI_PAGE_SIZE;
+  const items = LOCAL_AI_QUESTIONS.slice(start, start + LOCAL_AI_PAGE_SIZE);
+
+  panel.innerHTML = `
+    <div class="ai-local-list">
+      ${items.map(item => `
+        <button type="button" class="ai-local-chip" data-question="${escapeHtml(item.q)}">
+          <i class="bi ${item.icon}"></i>
+          <span>${escapeHtml(item.label)}</span>
+        </button>
+      `).join("")}
+    </div>
+
+    <div class="ai-local-pager">
+      ${currentLocalAiPage > 1 ? `
+        <button type="button" class="ai-local-page-btn" data-page="${currentLocalAiPage - 1}">
+          <i class="bi bi-chevron-left"></i> Prev
+        </button>
+      ` : ""}
+
+      ${Array.from({ length: totalPages }, (_, i) => i + 1).map(n => `
+        <button type="button" class="ai-local-page-num ${n === currentLocalAiPage ? "active" : ""}" data-page="${n}">
+          ${n}
+        </button>
+      `).join("")}
+
+      ${currentLocalAiPage < totalPages ? `
+        <button type="button" class="ai-local-page-btn" data-page="${currentLocalAiPage + 1}">
+          Next <i class="bi bi-chevron-right"></i>
+        </button>
+      ` : ""}
+    </div>
+  `;
+}
 
 function setAiLocalMode(enabled) {
   aiLocalMode = !!enabled;
@@ -1332,70 +1446,426 @@ function setAiLocalMode(enabled) {
 
   if (panel) {
     panel.classList.toggle("hidden", !aiLocalMode);
-  }
-}
-
-async function sendLocalStudyRoomQuestion(questionText) {
-  const text = String(questionText || "").trim();
-  if (!text) return;
-
-  const fastReply =
-    typeof buildStudyRoomFastAnswer === "function"
-      ? await buildStudyRoomFastAnswer(text)
-      : null;
-
-  let reply = fastReply;
-
-  if (!reply && typeof handleLocalAICommand === "function") {
-    const localReply = handleLocalAICommand(text);
-    if (localReply && localReply !== "__CLEAR__") {
-      reply = localReply;
+    if (aiLocalMode) {
+      renderAiLocalQuestionsPanel(currentLocalAiPage || 1);
     }
   }
-
-  if (!reply && typeof getCachedAIAnswer === "function") {
-    reply = getCachedAIAnswer(text);
-  }
-
-  if (!reply) {
-    reply =
-      "I can answer this in Local mode only when the app has that room data available.";
-  }
-
-  aiMessages.push({ role: "user", text });
-  aiMessages.push({ role: "assistant", text: reply });
-
-  trimAiHistory();
-  saveAiChat();
-  renderAiChat();
-  aiQuestionInput.value = "";
-  aiQuestionInput?.focus();
 }
 
-document.getElementById("btnLocalAiMode")?.addEventListener("click", () => {
-  setAiLocalMode(!aiLocalMode);
-});
+async function sendLocalStudyRoomQuestion(questionText, triggerEl = null) {
+  const text = String(questionText || "").trim();
+  if (!text || localAiBusy) return;
 
-document.getElementById("aiLocalQuestionsPanel")?.addEventListener("click", (e) => {
-  const chip = e.target.closest(".ai-local-chip");
-  if (!chip) return;
-  const q = chip.getAttribute("data-question") || "";
-  aiQuestionInput.value = q;
-  sendLocalStudyRoomQuestion(q);
-});
-// --------------------------------------------------------------------------
-// Configuration
-// --------------------------------------------------------------------------
+  const now = Date.now();
+  if (now < localAiActionLockUntil) {
+    toast("Please wait a moment before sending another local action.", "warning");
+    return;
+  }
 
-const AI_ENDPOINT = "/.netlify/functions/ai";
+  localAiBusy = true;
+  localAiActionLockUntil = now + LOCAL_AI_ACTION_LOCK_MS;
 
-// Only keep the latest conversation for Gemini
-const MAX_HISTORY = 2;
-// Maximum messages stored locally
-const MAX_LOCAL_MESSAGES = 60;
+  if (triggerEl) {
+    triggerEl.classList.add("is-loading");
+    triggerEl.disabled = true;
+  }
 
-// Retry only once
-const MAX_RETRY = 0;
+  try {
+    // Show the user's question immediately
+    aiMessages.push({ role: "user", text });
+    trimAiHistory();
+    saveAiChat();
+    renderAiChat();
+    scrollAiChatToBottom("smooth");
+    focusAiInputAfterAction();
+
+    // Show typing state
+    addThinkingBubble();
+    setAiLoading(true);
+
+    await wait(1000);
+
+    const smartAction = await runSmartLocalAiAction(text);
+
+    let reply = smartAction?.reply || null;
+
+    if (!reply && typeof buildStudyRoomFastAnswer === "function") {
+      reply = await buildStudyRoomFastAnswer(text);
+    }
+
+    if (!reply && typeof handleLocalAICommand === "function") {
+      const localReply = handleLocalAICommand(text);
+      if (localReply && localReply !== "__CLEAR__") {
+        reply = localReply;
+      }
+    }
+
+    if (!reply && typeof getCachedAIAnswer === "function") {
+      reply = getCachedAIAnswer(text);
+    }
+
+    if (!reply) {
+      reply = "I can answer this in Local mode only when the app has that room data available.";
+    }
+
+    if (smartAction?.toast) {
+      toast(smartAction.toast, "success");
+    }
+
+    removeThinkingBubble();
+
+    aiMessages.push({
+      role: "assistant",
+      text: reply,
+      source: smartAction ? "local-action" : "local"
+    });
+
+    trimAiHistory();
+    saveAiChat();
+    renderAiChat();
+    scrollAiChatToBottom("smooth");
+    flashLatestAiMessage();
+    focusAiInputAfterAction();
+
+    aiQuestionInput.value = "";
+  } finally {
+    removeThinkingBubble();
+    setAiLoading(false);
+
+    if (triggerEl) {
+      triggerEl.classList.remove("is-loading");
+      triggerEl.disabled = false;
+    }
+
+    localAiBusy = false;
+    focusAiInputAfterAction();
+  }
+}
+
+function getSmartLocalAiAction(questionText = "") {
+  const q = String(questionText).trim().toLowerCase().replace(/\s+/g, " ");
+
+  if (/(enter course|enter the course|join course|course entry|go to course)/.test(q)) {
+    return "enter-course";
+  }
+
+  if (/(leave room|exit room|room leave|close room|log out of room)/.test(q)) {
+    return "leave-room";
+  }
+
+  if (/(change pin|change the pin|update pin|new pin|set pin)/.test(q)) {
+    return "change-pin";
+  }
+
+  if (/(send message to online users|message online users|broadcast message|notify online users|message all online)/.test(q)) {
+    return "send-global-message";
+  }
+
+  if (/(show online users|online students|who is online|show online students)/.test(q)) {
+    return "show-online-users";
+  }
+
+  if (/(show inactive users|inactive users|who is inactive|show offline users)/.test(q)) {
+    return "show-inactive-users";
+  }
+
+  if (/(my seat status|seat status|my seat|what is my seat)/.test(q)) {
+    return "my-seat-status";
+  }
+
+  if (/(last activity|last seen|latest activity|recent activity)/.test(q)) {
+    return "last-activity";
+  }
+
+  if (/(room summary|summarize room|room report|room overview)/.test(q)) {
+    return "room-summary";
+  }
+
+  if (/(today report|today's report|daily report|report today|today summary)/.test(q)) {
+    return "today-report";
+  }
+
+  return null;
+}
+
+
+function focusAiInputAfterAction() {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      aiQuestionInput?.focus({ preventScroll: true });
+    });
+  });
+}
+
+function flashLatestAiMessage() {
+  if (!aiChatStream) return;
+
+  const items = aiChatStream.querySelectorAll(".ai-bubble");
+  const latest = items[items.length - 1];
+  if (!latest) return;
+
+  latest.classList.remove("ai-bubble-flash");
+  void latest.offsetWidth;
+  latest.classList.add("ai-bubble-flash");
+
+  setTimeout(() => {
+    latest.classList.remove("ai-bubble-flash");
+  }, 1200);
+}
+
+async function runSmartLocalAiAction(questionText = "") {
+  const action = getSmartLocalAiAction(questionText);
+  if (!action) return null;
+
+  if (!currentUser) {
+    return {
+      handled: true,
+      reply: "You need to join a seat first before using this action."
+    };
+  }
+
+  switch (action) {
+    case "enter-course":
+      await handleCourseActionButtonClick();
+      return {
+        handled: true,
+        reply: "🚀 Course flow started.",
+        toast: "Course flow started."
+      };
+
+    case "leave-room":
+      await leaveRoom(false, "ai-command-leave-room");
+      return {
+        handled: true,
+        reply: "🚪 Leave room action started.",
+        toast: "Leave room action started."
+      };
+
+    case "change-pin":
+      changePinBtn?.click();
+      return {
+        handled: true,
+        reply: "🔐 PIN modal opened.",
+        toast: "PIN modal opened."
+      };
+
+    case "send-global-message":
+      await openQuickMessagingModal(currentUser.id, currentUser.code, "global");
+      return {
+        handled: true,
+        reply: "📣 Message composer opened.",
+        toast: "Message composer opened."
+      };
+
+    case "show-online-users": {
+      if (typeof openOnlineUsersModal === "function") {
+        openOnlineUsersModal();
+      } else if (typeof renderOnlineUsersPanel === "function") {
+        renderOnlineUsersPanel();
+      }
+
+      const count = typeof getOnlineUsersCount === "function"
+        ? getOnlineUsersCount()
+        : null;
+
+      return {
+        handled: true,
+        reply: count != null
+          ? `🟢 Online users: ${count}.`
+          : "🟢 Online users opened.",
+        toast: "Online users opened."
+      };
+    }
+
+    case "show-inactive-users": {
+      if (typeof openInactiveUsersModal === "function") {
+        openInactiveUsersModal();
+      } else if (typeof renderInactiveUsersPanel === "function") {
+        renderInactiveUsersPanel();
+      }
+
+      const count = typeof getInactiveUsersCount === "function"
+        ? getInactiveUsersCount()
+        : null;
+
+      return {
+        handled: true,
+        reply: count != null
+          ? `⚪ Inactive users: ${count}.`
+          : "⚪ Inactive users opened.",
+        toast: "Inactive users opened."
+      };
+    }
+
+    case "my-seat-status": {
+      const seatName =
+        currentUser.seatName ||
+        currentUser.seatNumber ||
+        currentUser.seatId ||
+        "Unknown seat";
+
+      const roomCode = currentUser.roomCode || currentUser.code || "N/A";
+
+      return {
+        handled: true,
+        reply: `🪑 Your seat status:\nSeat: ${seatName}\nRoom: ${roomCode}\nState: ${currentUser.inCourse ? "In course" : "In room"}`,
+        toast: "Seat status shown."
+      };
+    }
+
+    case "last-activity": {
+      const lastActivity =
+        currentUser.lastActivity ||
+        currentUser.updatedAt ||
+        currentUser.activityAt ||
+        "No activity found";
+
+      return {
+        handled: true,
+        reply: `🕒 Last activity: ${lastActivity}`,
+        toast: "Last activity shown."
+      };
+    }
+
+    case "room-summary": {
+      let summary = null;
+
+      if (typeof buildRoomSummaryText === "function") {
+        summary = buildRoomSummaryText();
+      } else if (typeof getRoomSummaryText === "function") {
+        summary = getRoomSummaryText();
+      }
+
+      return {
+        handled: true,
+        reply: summary || "📊 Room summary is not available yet.",
+        toast: "Room summary shown."
+      };
+    }
+
+    case "today-report": {
+      let report = null;
+
+      if (typeof buildTodayReportText === "function") {
+        report = buildTodayReportText();
+      } else if (typeof getTodayReportText === "function") {
+        report = getTodayReportText();
+      }
+
+      return {
+        handled: true,
+        reply: report || "📅 Today report is not available yet.",
+        toast: "Today report shown."
+      };
+    }
+
+    default:
+      return null;
+  }
+}
+function getSmartLocalStudyRoomAction(questionText = "") {
+  const q = String(questionText).trim().toLowerCase().replace(/\s+/g, " ");
+
+  if (/(enter course|enter the course|join course|course entry|go to course|course now)/.test(q)) {
+    return { type: "enter-course" };
+  }
+
+  if (/(leave room|exit room|close room|log out of room|room leave|exit workspace)/.test(q)) {
+    return { type: "leave-room" };
+  }
+
+  if (/(change pin|change the pin|update pin|new pin|set pin|pin change)/.test(q)) {
+    return { type: "change-pin" };
+  }
+
+  if (/(send message to online users|message online users|send global message|broadcast message|notify online users|announce to online users)/.test(q)) {
+    return { type: "send-global-message" };
+  }
+
+  if (/(raise my hand|toggle hand|hand raise|lower hand|raise hand)/.test(q)) {
+    return { type: "toggle-hand" };
+  }
+
+  return null;
+}
+
+async function runSmartLocalStudyRoomAction(questionText = "") {
+  const action = getSmartLocalStudyRoomAction(questionText);
+  if (!action) return null;
+
+  switch (action.type) {
+    case "enter-course": {
+      if (!currentUser) {
+        return { handled: true, reply: "You need to join a seat first." };
+      }
+
+      if (currentUser.inCourse) {
+        return { handled: true, reply: "📚 You are already inside the course." };
+      }
+
+      await handleCourseActionButtonClick();
+      return {
+        handled: true,
+        reply: "🚀 Enter course action started using your existing course flow."
+      };
+    }
+
+    case "leave-room": {
+      if (!currentUser) {
+        return { handled: true, reply: "You are not inside the room right now." };
+      }
+
+      await leaveRoom(false, "ai-command-leave-room");
+      return {
+        handled: true,
+        reply: "🚪 Leave room action started using your existing room-leave flow."
+      };
+    }
+
+    case "change-pin": {
+      if (!currentUser) {
+        return { handled: true, reply: "You need to join a seat first." };
+      }
+
+      changePinBtn?.click();
+      newPinInputField?.focus({ preventScroll: true });
+
+      return {
+        handled: true,
+        reply: "🔐 Opened the existing PIN change window."
+      };
+    }
+
+    case "send-global-message": {
+      if (!currentUser) {
+        return { handled: true, reply: "You need to join a seat first." };
+      }
+
+      await openQuickMessagingModal(currentUser.id, currentUser.code, "global");
+      return {
+        handled: true,
+        reply: "📣 Opened the existing global message composer for online users."
+      };
+    }
+
+    case "toggle-hand": {
+      if (!currentUser) {
+        return { handled: true, reply: "You need to join a seat first." };
+      }
+
+      toggleMyHandRaise();
+      return {
+        handled: true,
+        reply: currentUser.handRaised
+          ? "✋ Your hand is now raised."
+          : "✋ Your hand is now lowered."
+      };
+    }
+
+    default:
+      return null;
+  }
+}
 
 // --------------------------------------------------------------------------
 // Local Storage
@@ -1932,7 +2402,22 @@ function cacheAIAnswer(question, answer) {
 
 }
 
+function scrollAiChatToBottom(behavior = "smooth") {
+  if (!aiChatStream) return;
 
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      try {
+        aiChatStream.scrollTo({
+          top: aiChatStream.scrollHeight,
+          behavior
+        });
+      } catch (_) {
+        aiChatStream.scrollTop = aiChatStream.scrollHeight;
+      }
+    });
+  });
+}
 // ==========================================================================
 // Validate AI Question
 // ==========================================================================
@@ -2107,9 +2592,7 @@ function showStudentAI(studentName = getCurrentStudentName()) {
   const inputBox = document.querySelector(".ai-input-box");
 
   if (inputBox) {
-
-      inputBox.style.display = "";
-
+    inputBox.style.display = "";
   }
 
   // ------------------------------------------------------
@@ -2117,24 +2600,17 @@ function showStudentAI(studentName = getCurrentStudentName()) {
   // ------------------------------------------------------
 
   if (btnSendAiQuestion) {
-
-      btnSendAiQuestion.disabled = false;
-
+    btnSendAiQuestion.disabled = false;
   }
 
   if (btnClearAiChat) {
-
-      btnClearAiChat.disabled = false;
-
+    btnClearAiChat.disabled = false;
   }
 
   if (aiQuestionInput) {
-
-      aiQuestionInput.disabled = false;
-
-      aiQuestionInput.placeholder =
-          "Ask anything about HTML, CSS, JavaScript, React, AI, Firebase...";
-
+    aiQuestionInput.disabled = false;
+    aiQuestionInput.placeholder =
+      "Ask anything about HTML, CSS, JavaScript, React, AI, Firebase...";
   }
 
   // ------------------------------------------------------
@@ -2144,17 +2620,14 @@ function showStudentAI(studentName = getCurrentStudentName()) {
   const restored = loadAiChat();
 
   if (restored) {
+    renderAiChat();
+    scrollAiChatToBottom("auto");
 
-      renderAiChat();
+    requestAnimationFrame(() => {
+      aiQuestionInput?.focus();
+    });
 
-      requestAnimationFrame(() => {
-
-          aiQuestionInput?.focus();
-
-      });
-
-      return;
-
+    return;
   }
 
   // ------------------------------------------------------
@@ -2164,10 +2637,8 @@ function showStudentAI(studentName = getCurrentStudentName()) {
   aiMessages = [];
 
   aiMessages.push({
-
-      role: "assistant",
-
-      text:
+    role: "assistant",
+    text:
 `👋 Welcome ${studentName}!
 
 I'm your Study Room Pro AI Assistant.
@@ -2214,20 +2685,17 @@ You can also ask me to:
 • Give practice exercises
 
 Let's learn something awesome today! 🚀`
-
   });
 
   saveAiChat();
-
   renderAiChat();
+  scrollAiChatToBottom("auto");
 
   requestAnimationFrame(() => {
-
-      aiQuestionInput?.focus();
-
+    aiQuestionInput?.focus();
   });
-
 }
+
 // --------------------------------------------------------------------------
 // Get Current Student Name
 // --------------------------------------------------------------------------
@@ -2487,13 +2955,8 @@ function clearAiChat() {
 // ==========================================================================
 // Render AI Chat
 // ==========================================================================
-// 4) Replace renderAiChat()
 function renderAiChat() {
   if (!aiChatStream) return;
-
-  const shouldAutoScroll =
-    aiChatStream.scrollTop + aiChatStream.clientHeight >=
-    aiChatStream.scrollHeight - 120;
 
   aiChatStream.innerHTML = "";
 
@@ -2505,25 +2968,45 @@ function renderAiChat() {
       <p>Start chatting with your AI learning assistant.</p>
     `;
     aiChatStream.appendChild(empty);
+    scrollAiChatToBottom("auto");
     return;
   }
 
   aiMessages.forEach((message) => {
+    if (message && message.isTyping) {
+      const typingBubble = document.createElement("div");
+      typingBubble.className = "ai-bubble ai-bubble-bot ai-bubble-typing";
+      typingBubble.innerHTML = `
+        <div class="ai-meta"><i class="bi bi-robot"></i> Study Room AI</div>
+        <div class="ai-typing-row">
+          <span>AI is typing</span>
+          <span class="ai-typing-dots"><i></i><i></i><i></i></span>
+        </div>
+      `;
+      aiChatStream.appendChild(typingBubble);
+      return;
+    }
+
+    const isLocalAssistant = message.role === "assistant" && message.source === "local";
+
     const bubble = document.createElement("div");
     bubble.className =
       "ai-bubble ai-bubble-" +
-      (message.role === "user" ? "user" : "bot");
+      (message.role === "user" ? "user" : "bot") +
+      (isLocalAssistant ? " ai-bubble-local" : "");
 
     const meta = document.createElement("div");
     meta.className = "ai-meta";
     meta.innerHTML =
       message.role === "user"
         ? `<i class="bi bi-person-fill"></i> You`
-        : `<i class="bi bi-robot"></i> Study Room AI`;
+        : `<i class="bi bi-robot"></i> Study Room AI${isLocalAssistant ? ' <span class="ai-local-badge">LOCAL</span>' : ""}`;
 
     const text = document.createElement("div");
     text.className = "ai-text";
-    text.innerHTML = renderAiMarkdown(message.text || "");
+    text.innerHTML = isLocalAssistant
+      ? decorateLocalReplyHtml(message.text || "")
+      : renderAiMarkdown(message.text || "");
 
     bubble.appendChild(meta);
     bubble.appendChild(text);
@@ -2556,12 +3039,7 @@ function renderAiChat() {
     aiChatStream.appendChild(bubble);
   });
 
-  if (shouldAutoScroll) {
-    aiChatStream.scrollTo({
-      top: aiChatStream.scrollHeight,
-      behavior: "smooth"
-    });
-  }
+  scrollAiChatToBottom("smooth");
 }
 
 // --------------------------------------------------------------------------
@@ -2569,33 +3047,29 @@ function renderAiChat() {
 // --------------------------------------------------------------------------
 
 function addThinkingBubble() {
+  removeThinkingBubble();
 
   aiMessages.push({
-
-      role: "assistant",
-
-      text: "🤔 Thinking..."
-
+    role: "assistant",
+    text: "AI is typing…",
+    isTyping: true
   });
 
   renderAiChat();
-
+  scrollAiChatToBottom("smooth");
 }
 
 function removeThinkingBubble() {
-
   const index = aiMessages.findIndex(
-
-      m => m.text === "🤔 Thinking..."
-
+    (m) =>
+      m.isTyping ||
+      m.text === "AI is typing…" ||
+      m.text === "🤔 Thinking..."
   );
 
   if (index >= 0) {
-
-      aiMessages.splice(index, 1);
-
+    aiMessages.splice(index, 1);
   }
-
 }
 
 // --------------------------------------------------------------------------
@@ -3358,6 +3832,18 @@ function renderAiMarkdown(text) {
 
   return marked.parse(text);
 
+}
+
+function decorateLocalReplyHtml(text = "") {
+  let html = escapeHtml(String(text));
+
+  html = html.replace(/\bRank\s*#?(\d+)\b/gi, '<span class="ai-num-pill ai-rank-pill">Rank #$1</span>');
+  html = html.replace(/\bSeat\s*(\d+)\b/gi, '<span class="ai-num-pill ai-seat-pill">Seat $1</span>');
+  html = html.replace(/\b(\d+)%\b/g, '<span class="ai-num-pill ai-percent-pill">$1%</span>');
+  html = html.replace(/\b(\d{1,2}:\d{2}(?::\d{2})?)\b/g, '<span class="ai-num-pill ai-time-pill">$1</span>');
+  html = html.replace(/\b(\d+)\s*(users|students|messages|minutes|hours|hands|joins)\b/gi, '<span class="ai-num-pill ai-count-pill">$1 $2</span>');
+
+  return html.replace(/\n/g, "<br>");
 }
 // --------------------------------------------------------------------------
 // Button Events
