@@ -1331,11 +1331,26 @@ document.getElementById("btnLocalAiMode")?.addEventListener("click", () => {
 });
 
 document.getElementById("aiLocalQuestionsPanel")?.addEventListener("click", async (e) => {
-  const pageBtn = e.target.closest(".ai-local-page-btn, .ai-local-page-num");
+  const pageBtn = e.target.closest("[data-local-page]");
   if (pageBtn) {
-    const page = Number(pageBtn.getAttribute("data-page") || "1");
-    renderAiLocalQuestionsPanel(page);
+    const page = Number(pageBtn.getAttribute("data-local-page") || "1");
+    renderAiLocalQuestionsPanel(page, 0);
     return;
+  }
+
+  const navBtn = e.target.closest("[data-local-nav]");
+  if (navBtn) {
+    const nav = navBtn.getAttribute("data-local-nav");
+
+    if (nav === "prev-window") {
+      renderAiLocalQuestionsPanel(currentLocalAiPage, currentLocalAiOffset - LOCAL_AI_VISIBLE_PER_ROW);
+      return;
+    }
+
+    if (nav === "next-window") {
+      renderAiLocalQuestionsPanel(currentLocalAiPage, currentLocalAiOffset + LOCAL_AI_VISIBLE_PER_ROW);
+      return;
+    }
   }
 
   const chip = e.target.closest(".ai-local-chip");
@@ -1362,8 +1377,30 @@ const MAX_RETRY = 0;
 
 
 const LOCAL_AI_PAGE_SIZE = 5;
-let currentLocalAiPage = 1;
 
+const LOCAL_AI_VISIBLE_PER_ROW = 2;
+
+let currentLocalAiPage = 1;
+let currentLocalAiOffset = 0;
+
+function setAiComposerVisibilityForLocalMode(enabled) {
+  const inputBox = document.querySelector(".ai-input-box");
+  const actionsRow = document.querySelector(".ai-actions-row");
+  
+  const sendBtn = document.getElementById("btnSendAiQuestion");
+  const stopBtn = document.getElementById("btnStopAiGeneration");
+  const overlay = document.getElementById("aiAssistantModalOverlay");
+
+  overlay?.classList.toggle("ai-local-mode", enabled);
+
+  if (inputBox) inputBox.style.display = enabled ? "none" : "";
+  if (sendBtn) sendBtn.style.display = enabled ? "none" : "";
+  if (stopBtn) stopBtn.style.display = enabled ? "none" : "";
+
+  if (actionsRow) {
+    actionsRow.classList.toggle("ai-local-actions-compact", enabled);
+  }
+}
 const LOCAL_AI_QUESTIONS = [
   { q: "Who is rank 1?", icon: "bi-trophy-fill", label: "Rank 1" },
   { q: "Who is the latest joined the room?", icon: "bi-clock-history", label: "Latest joined" },
@@ -1389,7 +1426,7 @@ function getLocalAiPageCount() {
   return Math.max(1, Math.ceil(LOCAL_AI_QUESTIONS.length / LOCAL_AI_PAGE_SIZE));
 }
 
-function renderAiLocalQuestionsPanel(page = 1) {
+function renderAiLocalQuestionsPanel(page = 1, offset = 0) {
   const panel = document.getElementById("aiLocalQuestionsPanel");
   if (!panel) return;
 
@@ -1397,45 +1434,102 @@ function renderAiLocalQuestionsPanel(page = 1) {
   currentLocalAiPage = Math.min(Math.max(1, page), totalPages);
 
   const start = (currentLocalAiPage - 1) * LOCAL_AI_PAGE_SIZE;
-  const items = LOCAL_AI_QUESTIONS.slice(start, start + LOCAL_AI_PAGE_SIZE);
+  const pageItems = LOCAL_AI_QUESTIONS.slice(start, start + LOCAL_AI_PAGE_SIZE);
+
+  const maxOffset = Math.max(0, pageItems.length - LOCAL_AI_VISIBLE_PER_ROW);
+  currentLocalAiOffset = Math.min(Math.max(0, offset), maxOffset);
+
+  const visibleItems = pageItems.slice(
+    currentLocalAiOffset,
+    currentLocalAiOffset + LOCAL_AI_VISIBLE_PER_ROW
+  );
+
+  const hiddenCount = Math.max(
+    0,
+    pageItems.length - currentLocalAiOffset - visibleItems.length
+  );
 
   panel.innerHTML = `
     <div class="ai-local-wrap">
-      <div class="ai-local-list">
-        ${items.map(item => `
-          <button
-            type="button"
-            class="ai-local-chip"
-            data-question="${escapeHtml(item.q)}"
-          >
-            <i class="bi ${item.icon}"></i>
-            <span>${escapeHtml(item.label)}</span>
-          </button>
-        `).join("")}
+      <div class="ai-local-strip">
+        <button
+          type="button"
+          class="ai-local-nav-btn"
+          data-local-nav="prev-window"
+          ${currentLocalAiOffset <= 0 ? "disabled" : ""}
+          aria-label="Show previous local questions"
+        >
+          <i class="bi bi-chevron-left"></i>
+        </button>
+
+        <div class="ai-local-track">
+          ${visibleItems
+            .map(
+              (item) => `
+                <button
+                  type="button"
+                  class="ai-local-chip"
+                  data-question="${escapeHtml(item.q)}"
+                  title="${escapeHtml(item.q)}"
+                >
+                  <i class="bi ${item.icon}"></i>
+                  <span>${escapeHtml(item.label)}</span>
+                </button>
+              `
+            )
+            .join("")}
+
+          ${
+            hiddenCount > 0
+              ? `
+                <button
+                  type="button"
+                  class="ai-local-more-pill"
+                  data-local-nav="next-window"
+                  title="Show ${hiddenCount} more question${hiddenCount > 1 ? "s" : ""}"
+                >
+                  +${hiddenCount}
+                </button>
+              `
+              : ""
+          }
+        </div>
+
+        <button
+          type="button"
+          class="ai-local-nav-btn"
+          data-local-nav="next-window"
+          ${currentLocalAiOffset >= maxOffset ? "disabled" : ""}
+          aria-label="Show next local questions"
+        >
+          <i class="bi bi-chevron-right"></i>
+        </button>
       </div>
 
-      <div class="ai-local-pager">
-        ${currentLocalAiPage > 1 ? `
-          <button type="button" class="ai-local-page-btn" data-page="${currentLocalAiPage - 1}">
-            <i class="bi bi-chevron-left"></i> Prev
-          </button>
-        ` : ""}
+      <div class="ai-local-pagebar">
+        <button
+          type="button"
+          class="ai-local-page-btn"
+          data-local-page="${currentLocalAiPage - 1}"
+          ${currentLocalAiPage <= 1 ? "disabled" : ""}
+          aria-label="Previous question page"
+        >
+          <i class="bi bi-chevron-left"></i>
+        </button>
 
-        ${Array.from({ length: totalPages }, (_, i) => i + 1).map(n => `
-          <button
-            type="button"
-            class="ai-local-page-num ${n === currentLocalAiPage ? "active" : ""}"
-            data-page="${n}"
-          >
-            ${n}
-          </button>
-        `).join("")}
+        <span class="ai-local-page-label">
+          ${currentLocalAiPage} / ${totalPages}
+        </span>
 
-        ${currentLocalAiPage < totalPages ? `
-          <button type="button" class="ai-local-page-btn" data-page="${currentLocalAiPage + 1}">
-            Next <i class="bi bi-chevron-right"></i>
-          </button>
-        ` : ""}
+        <button
+          type="button"
+          class="ai-local-page-btn"
+          data-local-page="${currentLocalAiPage + 1}"
+          ${currentLocalAiPage >= totalPages ? "disabled" : ""}
+          aria-label="Next question page"
+        >
+          <i class="bi bi-chevron-right"></i>
+        </button>
       </div>
     </div>
   `;
@@ -1450,14 +1544,16 @@ function setAiLocalMode(enabled) {
   if (localBtn) {
     localBtn.classList.toggle("ai-mode-active", aiLocalMode);
     localBtn.innerHTML = aiLocalMode
-      ? '<i class="bi bi-lightning-charge-fill"></i> Local On'
-      : '<i class="bi bi-lightning-charge-fill"></i> Local';
+      ? '<i class="bi bi-lightning-charge-fill"></i> Local Off'
+      : '<i class="bi bi-lightning-charge-fill"></i> Local On';
   }
+
+  setAiComposerVisibilityForLocalMode(aiLocalMode);
 
   if (panel) {
     panel.classList.toggle("hidden", !aiLocalMode);
     if (aiLocalMode) {
-      renderAiLocalQuestionsPanel(currentLocalAiPage || 1);
+      renderAiLocalQuestionsPanel(currentLocalAiPage || 1, currentLocalAiOffset || 0);
     }
   }
 }
