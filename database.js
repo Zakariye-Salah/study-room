@@ -1400,33 +1400,43 @@ function renderAiLocalQuestionsPanel(page = 1) {
   const items = LOCAL_AI_QUESTIONS.slice(start, start + LOCAL_AI_PAGE_SIZE);
 
   panel.innerHTML = `
-    <div class="ai-local-list">
-      ${items.map(item => `
-        <button type="button" class="ai-local-chip" data-question="${escapeHtml(item.q)}">
-          <i class="bi ${item.icon}"></i>
-          <span>${escapeHtml(item.label)}</span>
-        </button>
-      `).join("")}
-    </div>
+    <div class="ai-local-wrap">
+      <div class="ai-local-list">
+        ${items.map(item => `
+          <button
+            type="button"
+            class="ai-local-chip"
+            data-question="${escapeHtml(item.q)}"
+          >
+            <i class="bi ${item.icon}"></i>
+            <span>${escapeHtml(item.label)}</span>
+          </button>
+        `).join("")}
+      </div>
 
-    <div class="ai-local-pager">
-      ${currentLocalAiPage > 1 ? `
-        <button type="button" class="ai-local-page-btn" data-page="${currentLocalAiPage - 1}">
-          <i class="bi bi-chevron-left"></i> Prev
-        </button>
-      ` : ""}
+      <div class="ai-local-pager">
+        ${currentLocalAiPage > 1 ? `
+          <button type="button" class="ai-local-page-btn" data-page="${currentLocalAiPage - 1}">
+            <i class="bi bi-chevron-left"></i> Prev
+          </button>
+        ` : ""}
 
-      ${Array.from({ length: totalPages }, (_, i) => i + 1).map(n => `
-        <button type="button" class="ai-local-page-num ${n === currentLocalAiPage ? "active" : ""}" data-page="${n}">
-          ${n}
-        </button>
-      `).join("")}
+        ${Array.from({ length: totalPages }, (_, i) => i + 1).map(n => `
+          <button
+            type="button"
+            class="ai-local-page-num ${n === currentLocalAiPage ? "active" : ""}"
+            data-page="${n}"
+          >
+            ${n}
+          </button>
+        `).join("")}
 
-      ${currentLocalAiPage < totalPages ? `
-        <button type="button" class="ai-local-page-btn" data-page="${currentLocalAiPage + 1}">
-          Next <i class="bi bi-chevron-right"></i>
-        </button>
-      ` : ""}
+        ${currentLocalAiPage < totalPages ? `
+          <button type="button" class="ai-local-page-btn" data-page="${currentLocalAiPage + 1}">
+            Next <i class="bi bi-chevron-right"></i>
+          </button>
+        ` : ""}
+      </div>
     </div>
   `;
 }
@@ -1456,40 +1466,92 @@ async function sendLocalStudyRoomQuestion(questionText, triggerEl = null) {
   const text = String(questionText || "").trim();
   if (!text || localAiBusy) return;
 
-  const now = Date.now();
-  if (now < localAiActionLockUntil) {
-    toast("Please wait a moment before sending another local action.", "warning");
-    return;
-  }
-
   localAiBusy = true;
-  localAiActionLockUntil = now + LOCAL_AI_ACTION_LOCK_MS;
+
+  const panel = document.getElementById("aiLocalQuestionsPanel");
+  if (panel) panel.classList.add("ai-panel-loading");
 
   if (triggerEl) {
     triggerEl.classList.add("is-loading");
     triggerEl.disabled = true;
   }
 
+  const cleanup = () => {
+    if (panel) panel.classList.remove("ai-panel-loading");
+    if (triggerEl) {
+      triggerEl.classList.remove("is-loading");
+      triggerEl.disabled = false;
+    }
+    localAiBusy = false;
+    setAiLoading(false);
+    removeThinkingBubble();
+    focusAiInputAfterAction();
+  };
+
   try {
-    // Show the user's question immediately
+    const smartPlan = currentUser ? buildSmartLocalActionPlan(text) : null;
+
+    if (smartPlan) {
+      closeAiAssistantModalIfOpen();
+
+      openConfirmationModal(
+        smartPlan.title,
+        smartPlan.message,
+        async () => {
+          try {
+            aiMessages.push({ role: "user", text });
+            trimAiHistory();
+            saveAiChat();
+            renderAiChat();
+            scrollAiChatToBottom("smooth");
+
+            addThinkingBubble();
+            setAiLoading(true);
+
+            await wait(1000);
+
+            await smartPlan.run();
+
+            removeThinkingBubble();
+
+            aiMessages.push({
+              role: "assistant",
+              text: smartPlan.reply,
+              source: "local-action"
+            });
+
+            trimAiHistory();
+            saveAiChat();
+            renderAiChat();
+            scrollAiChatToBottom("smooth");
+            flashLatestAiMessage();
+            focusAiInputAfterAction();
+          } finally {
+            cleanup();
+          }
+        },
+        () => {
+          cleanup();
+        }
+      );
+
+      return;
+    }
+
     aiMessages.push({ role: "user", text });
     trimAiHistory();
     saveAiChat();
     renderAiChat();
     scrollAiChatToBottom("smooth");
-    focusAiInputAfterAction();
 
-    // Show typing state
     addThinkingBubble();
     setAiLoading(true);
 
     await wait(1000);
 
-    const smartAction = await runSmartLocalAiAction(text);
+    let reply = null;
 
-    let reply = smartAction?.reply || null;
-
-    if (!reply && typeof buildStudyRoomFastAnswer === "function") {
+    if (typeof buildStudyRoomFastAnswer === "function") {
       reply = await buildStudyRoomFastAnswer(text);
     }
 
@@ -1508,16 +1570,12 @@ async function sendLocalStudyRoomQuestion(questionText, triggerEl = null) {
       reply = "I can answer this in Local mode only when the app has that room data available.";
     }
 
-    if (smartAction?.toast) {
-      toast(smartAction.toast, "success");
-    }
-
     removeThinkingBubble();
 
     aiMessages.push({
       role: "assistant",
       text: reply,
-      source: smartAction ? "local-action" : "local"
+      source: "local"
     });
 
     trimAiHistory();
@@ -1529,16 +1587,7 @@ async function sendLocalStudyRoomQuestion(questionText, triggerEl = null) {
 
     aiQuestionInput.value = "";
   } finally {
-    removeThinkingBubble();
-    setAiLoading(false);
-
-    if (triggerEl) {
-      triggerEl.classList.remove("is-loading");
-      triggerEl.disabled = false;
-    }
-
-    localAiBusy = false;
-    focusAiInputAfterAction();
+    cleanup();
   }
 }
 
@@ -2922,6 +2971,70 @@ function closeAiAssistantModal() {
 
 }
 
+function closeAiAssistantModalIfOpen() {
+  if (typeof closeAiAssistantModal === "function") {
+    closeAiAssistantModal();
+    return;
+  }
+
+  if (typeof aiAssistantModalOverlay !== "undefined" && aiAssistantModalOverlay) {
+    aiAssistantModalOverlay.classList.add("hidden");
+  }
+}
+
+function buildSmartLocalActionPlan(questionText = "") {
+  const action = getSmartLocalAiAction(questionText);
+  if (!action) return null;
+
+  const plans = {
+    "enter-course": {
+      title: "Open course action?",
+      message: "Do you want me to open the course flow now?",
+      reply: "🚀 Course flow started.",
+      confirmLabel: "Open course",
+      run: async () => {
+        if (typeof handleCourseActionButtonClick === "function") {
+          await handleCourseActionButtonClick();
+          return;
+        }
+        btnTriggerEnterCourseEmbed?.click();
+      }
+    },
+
+    "leave-room": {
+      title: "Leave the room?",
+      message: "Do you want me to leave the room now?",
+      reply: "🚪 Leave room action started.",
+      confirmLabel: "Leave room",
+      run: async () => {
+        await leaveRoom(false, "ai-command-leave-room");
+      }
+    },
+
+    "change-pin": {
+      title: "Change PIN?",
+      message: "Do you want me to open the PIN change window now?",
+      reply: "🔐 PIN modal opened.",
+      confirmLabel: "Open PIN modal",
+      run: async () => {
+        changePinBtn?.click();
+      }
+    },
+
+    "send-global-message": {
+      title: "Send message to online users?",
+      message: "Do you want me to open the global message composer now?",
+      reply: "📣 Message composer opened.",
+      confirmLabel: "Open composer",
+      run: async () => {
+        await openQuickMessagingModal(currentUser.id, currentUser.code, "global");
+      }
+    }
+  };
+
+  return plans[action] || null;
+}
+
 // --------------------------------------------------------------------------
 // Clear Conversation
 // --------------------------------------------------------------------------
@@ -2987,7 +3100,9 @@ function renderAiChat() {
       return;
     }
 
-    const isLocalAssistant = message.role === "assistant" && message.source === "local";
+    const source = String(message.source || "");
+    const isLocalAssistant = message.role === "assistant" && source.startsWith("local");
+    const isActionReply = source === "local-action";
 
     const bubble = document.createElement("div");
     bubble.className =
@@ -3000,7 +3115,11 @@ function renderAiChat() {
     meta.innerHTML =
       message.role === "user"
         ? `<i class="bi bi-person-fill"></i> You`
-        : `<i class="bi bi-robot"></i> Study Room AI${isLocalAssistant ? ' <span class="ai-local-badge">LOCAL</span>' : ""}`;
+        : `<i class="bi bi-robot"></i> Study Room AI${
+            isLocalAssistant
+              ? ` <span class="ai-local-badge">${isActionReply ? "ACTION" : "LOCAL"}</span>`
+              : ""
+          }`;
 
     const text = document.createElement("div");
     text.className = "ai-text";
