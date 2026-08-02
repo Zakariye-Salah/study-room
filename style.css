@@ -4355,14 +4355,7 @@ body {
 }
 
 
-#aiAssistantModalOverlay.ai-local-mode .ai-input-box {
-  display: none !important;
-}
 
-#aiAssistantModalOverlay.ai-local-mode #btnSendAiQuestion,
-#aiAssistantModalOverlay.ai-local-mode #btnStopAiGeneration {
-  display: none !important;
-}
 
 #aiAssistantModalOverlay.ai-local-mode .ai-actions-row {
   justify-content: center;
@@ -4470,4 +4463,106 @@ body {
   #aiAssistantModalOverlay.ai-local-mode .ai-chat-stream {
     max-height: 36vh;
   }
+}
+
+
+.ai-input-box{
+
+  transition:all .25s ease;
+
+}
+
+#aiQuestionInput{
+
+  transition:
+      opacity .20s ease,
+      transform .20s ease,
+      max-height .25s ease,
+      margin .25s ease,
+      padding .25s ease;
+
+  max-height:180px;
+
+  overflow:hidden;
+}
+
+#aiQuestionInput.composer-hidden{
+
+  opacity:0;
+
+  transform:translateY(-20px);
+
+  max-height:0;
+
+  margin:0;
+
+  padding-top:0;
+  padding-bottom:0;
+
+  pointer-events:none;
+}
+
+#btnSendAiQuestion,
+#btnStopAiGeneration,
+#btnClearAiChat{
+
+  transition:
+      opacity .20s ease,
+      transform .20s ease,
+      max-width .20s ease,
+      margin .20s ease;
+
+}
+
+#btnSendAiQuestion.composer-hidden,
+#btnStopAiGeneration.composer-hidden,
+#btnClearAiChat.composer-hidden{
+
+  opacity:0;
+
+  transform:translateY(-10px);
+
+  max-width:0;
+
+  width:0;
+
+  margin:0;
+
+  padding-left:0;
+  padding-right:0;
+
+  overflow:hidden;
+
+  pointer-events:none;
+
+}
+
+.ai-local-questions-panel{
+
+  overflow:hidden;
+
+  max-height:0;
+
+  opacity:0;
+
+  transform:translateY(-12px);
+
+  transition:
+      max-height .25s ease,
+      opacity .20s ease,
+      transform .20s ease,
+      margin-top .25s ease;
+
+}
+
+.ai-local-questions-panel:not(.hidden){
+
+  max-height:500px;
+
+  opacity:1;
+
+  transform:translateY(0);
+
+  margin-top:14px;
+
 }
