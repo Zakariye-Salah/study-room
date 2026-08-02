@@ -4353,3 +4353,121 @@ body {
     flex: 1 1 auto;
   }
 }
+
+
+#aiAssistantModalOverlay.ai-local-mode .ai-input-box {
+  display: none !important;
+}
+
+#aiAssistantModalOverlay.ai-local-mode #btnSendAiQuestion,
+#aiAssistantModalOverlay.ai-local-mode #btnStopAiGeneration {
+  display: none !important;
+}
+
+#aiAssistantModalOverlay.ai-local-mode .ai-actions-row {
+  justify-content: center;
+}
+
+.ai-local-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.ai-local-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.ai-local-track {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ai-local-chip {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  justify-content: flex-start;
+}
+
+.ai-local-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-local-more-pill,
+.ai-local-nav-btn,
+.ai-local-page-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.ai-local-more-pill {
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.55);
+  color: var(--text-primary);
+  border-radius: 999px;
+  padding: 10px 12px;
+  font-weight: 800;
+  min-height: 44px;
+}
+
+.ai-local-pagebar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.ai-local-page-label {
+  min-width: 64px;
+  text-align: center;
+  font-weight: 800;
+  color: var(--text-secondary);
+}
+
+.ai-local-nav-btn,
+.ai-local-page-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+}
+
+@media (max-width: 600px) {
+  .ai-local-strip {
+    gap: 6px;
+  }
+
+  .ai-local-track {
+    gap: 6px;
+  }
+
+  .ai-local-chip,
+  .ai-local-more-pill {
+    min-height: 42px;
+    padding-top: 9px;
+    padding-bottom: 9px;
+  }
+
+  .ai-local-page-label {
+    min-width: 52px;
+    font-size: 12px;
+  }
+
+  #aiAssistantModalOverlay.ai-local-mode .ai-chat-stream {
+    max-height: 36vh;
+  }
+}
