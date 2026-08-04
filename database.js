@@ -25,7 +25,7 @@ const SEATS = {
 };
 
 // SESSION LIMITS & AUTO-KICK CONFIGURATION
-const SESSION_LIMIT = 5 * 60 * 60 * 1000; // 18,000,000 ms (5 hours)
+const SESSION_LIMIT = 5 * 60 * 60 * 1000; 
 const MIN_VISIBLE_SESSION_MS = 1000;
 let autoRemovalTimeoutInstance = null;
 let courseTimerIntervalInstance = null;
@@ -1084,12 +1084,31 @@ async function finalizeCourseSessionsForPresence({
       if (!record) return;
       const recordCode = normalizeSeatCode(record.code || normalizedCode || "--");
       const recordToken = String(record.sessionToken || "").trim();
-      const open = !Number(record.end) || Number(record.end) <= 0;
-      const codeMatches = !normalizedCode || recordCode === normalizedCode;
+      const alreadyFinalized =
+      record.finalized === true ||
+      (Number(record.end) > 0);
+  
+  const open = !alreadyFinalized;      
+  const codeMatches = !normalizedCode || recordCode === normalizedCode;
       const tokenMatches = !expectedToken || recordToken === expectedToken;
       if (open && codeMatches && tokenMatches) {
+        const existing =
+        [...updatesById.entries()][0];
+    
+    if (!existing) {
         updatesById.set(sessionId, record);
-      }
+    } else {
+        const existingStart =
+            Number(existing[1].start) || 0;
+    
+        const newStart =
+            Number(record.start) || 0;
+    
+        if (newStart > existingStart) {
+            updatesById.clear();
+            updatesById.set(sessionId, record);
+        }
+    }      }
     });
   };
 
@@ -1120,8 +1139,21 @@ async function finalizeCourseSessionsForPresence({
       start: recordStart || startOverride || normalizedEnd,
       roomJoinedAt: Number(record.roomJoinedAt) || roomJoinedAt || 0
     }, normalizedEnd);
-    const duration = Math.max(0, normalizedEnd - resolvedStart);
-    tasks.push(
+    const roomCap = Math.max(
+      0,
+      normalizedEnd - (
+          Number(record.roomJoinedAt) ||
+          roomJoinedAt ||
+          resolvedStart
+      )
+  );
+  
+  const duration = Math.min(
+      SESSION_LIMIT,
+      roomCap,
+      Math.max(0, normalizedEnd - resolvedStart)
+  );    
+  tasks.push(
       db.ref(`${COURSE_SESSION_COLLECTION}/${sessionId}`).update({
         name: record.name || name || getSeatDisplayName(normalizedCode, "Unknown"),
         code: normalizeSeatCode(record.code || normalizedCode || "--"),
@@ -1132,6 +1164,8 @@ async function finalizeCourseSessionsForPresence({
         end: normalizedEnd,
         duration,
         status: normalizedReason,
+        finalized: true,
+        finalizedAt: normalizedEnd,
         endLabel: formatAbsoluteDateTime(normalizedEnd)
       }).catch(() => {})
     );
@@ -1268,8 +1302,15 @@ async function closeStalePresenceSession(seatData, leaseData = null) {
 
   await db.ref(`weeklyHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + roomDuration).catch(() => {});
   if (wasInCourse) {
-    await db.ref(`weeklyCourseHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + courseDuration).catch(() => {});
-  }
+    const safeCourseDuration = Math.min(
+      courseDuration,
+      roomDuration
+  );
+  
+  await db.ref(
+  `weeklyCourseHours/${getWeekIdentifier()}/${code}`
+  ).transaction(v => (v || 0) + safeCourseDuration);  
+}
   await db.ref(`dailyHours/${getTodayIdentifier()}/${code}`).transaction(v => (v || 0) + roomDuration).catch(() => {});
   await db.ref(`monthlyHours/${getMonthIdentifier()}/${code}`).transaction(v => (v || 0) + roomDuration).catch(() => {});
   await db.ref(`allTimeHours/${code}`).transaction(v => (v || 0) + roomDuration).catch(() => {});
@@ -4729,7 +4770,15 @@ async function leaveCourse(auto = false, reason = "manual-course-leave", opts = 
         sessionToken
       });
 
-      await db.ref(`weeklyCourseHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + courseDuration);
+
+      const safeCourseDuration = Math.min(
+        courseDuration,
+        Math.max(0, leaveTime - roomStartTime)
+    );
+    
+    await db.ref(
+        `weeklyCourseHours/${getWeekIdentifier()}/${code}`
+    ).transaction(v => (v || 0) + safeCourseDuration);
     }
 
     if (!silent) {
@@ -6937,7 +6986,16 @@ async function leaveRoom(auto = false, reason = "leave") {
 
     await db.ref(`weeklyHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
     if (wasInCourse) {
-      await db.ref(`weeklyCourseHours/${getWeekIdentifier()}/${code}`).transaction(v => (v || 0) + courseDuration);
+
+
+      const safeCourseDuration = Math.min(
+        courseDuration,
+        sessionDuration
+    );
+    
+    await db.ref(
+    `weeklyCourseHours/${getWeekIdentifier()}/${code}`
+    ).transaction(v => (v || 0) + safeCourseDuration);
     }
     await db.ref(`dailyHours/${getTodayIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
     await db.ref(`monthlyHours/${getMonthIdentifier()}/${code}`).transaction(v => (v || 0) + sessionDuration);
