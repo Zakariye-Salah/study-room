@@ -223,7 +223,9 @@ let activeAttendanceReportUser = "all";
 let activeAttendanceReportLimit = 10;
 const ACTIVE_PRESENCE_GRACE_MS = 90000;
 const HIDDEN_PRESENCE_GRACE_MS = ACTIVE_PRESENCE_GRACE_MS;
-const HEARTBEAT_INTERVAL_MS = 15000;
+
+const HEARTBEAT_INTERVAL_MS = 60000;
+const STALE_SESSION_SWEEP_INTERVAL_MS = 60000;
 const COURSE_SESSION_COLLECTION = "courseSessions";
 
 let activeAttendanceEventsCache = [];
@@ -361,7 +363,6 @@ function toggleBestUsersSnapshot() {
   setBestUsersSnapshotExpanded(!bestUsersSnapshotExpanded);
 }
 
-const STALE_SESSION_SWEEP_INTERVAL_MS = 30000;
 
 const JOIN_WELCOME_MESSAGES = [
   "Welcome aboard — great progress starts here.",
@@ -5010,21 +5011,26 @@ function renderAttendanceRows(targetEl, events, limit) {
 }
 
 async function refreshAttendanceViews(options = {}) {
-  const { silentReportRefresh = false } = options;
+  const { silentReportRefresh = false, includeWeeklySnapshot = false } = options;
   try {
     const [attendanceSnap, seatsSnap, onlineSnap] = await Promise.all([
       db.ref('attendance').get(),
       db.ref('seats').get(),
       db.ref('onlineUsers').get()
     ]);
+
     const presenceMap = mergePresenceMaps(
       getPresenceMapFromSeatsSnapshot(seatsSnap.val() || {}),
       getPresenceMapFromSeatsSnapshot(onlineSnap.val() || {})
     );
+
     const rawEvents = Object.values(attendanceSnap.val() || {});
     activeAttendanceEventsCache = buildResolvedAttendanceEvents(rawEvents, presenceMap);
     renderAttendanceRows(attendanceList, activeAttendanceEventsCache, liveAttendanceLogLimit);
-    renderWeeklyBestUsersSnapshot().catch(() => {});
+
+    if (includeWeeklySnapshot) {
+      await renderWeeklyBestUsersSnapshot();
+    }
 
     if (attendanceReportModalOverlay && !attendanceReportModalOverlay.classList.contains('hidden')) {
       await renderAttendanceReportModal({ silent: silentReportRefresh });
@@ -7855,9 +7861,19 @@ function initRealtimeDatabaseListeners() {
     renderWeeklyBestUsersSnapshot().catch(() => {});
   });
   
-  db.ref("attendance").on("value", () => {
-    refreshAttendanceViews();
-  });
+  const ATTENDANCE_REFRESH_INTERVAL_MS = 30000;
+
+    setInterval(() => {
+      refreshAttendanceViews({
+        includeWeeklySnapshot: false,
+        silentReportRefresh: true
+      });
+    }, ATTENDANCE_REFRESH_INTERVAL_MS);
+
+    refreshAttendanceViews({
+      includeWeeklySnapshot: true,
+      silentReportRefresh: false
+    });
 }
 
 
