@@ -5410,49 +5410,11 @@ async function renderWeeklyBestUsersSnapshot() {
       db.ref("weeklyCourseHours").get()
     ]);
 
-    const currentWeekKey = getWeekIdentifier();
-    const weeklyRoomData = weeklyRoomSnap.val() || {};
-    const weeklyCourseData = weeklyCourseSnap.val() || {};
-
-    const roomWeek = weeklyRoomData[currentWeekKey] || {};
-    const courseWeek = weeklyCourseData[currentWeekKey] || {};
-
-    const buildWeeklyRows = (weekData, roomData = null) => {
-      return Object.entries(weekData)
-        .filter(([, ms]) => Number(ms) > 0)
-        .map(([code, ms]) => {
-          const normalizedCode = normalizeSeatCode(code);
-          const safeTotal = Number(ms) || 0;
-          const roomTotal = roomData ? Number(roomData[normalizedCode] || 0) : 0;
-          return {
-            code: normalizedCode,
-            name: getCanonicalSeatName(normalizedCode, "Unknown"),
-            totalMs: roomData ? (roomTotal > 0 ? Math.min(safeTotal, roomTotal) : safeTotal) : safeTotal
-          };
-        })
-        .sort((a, b) => b.totalMs - a.totalMs || String(a.name).localeCompare(String(b.name)));
-    };
-
-    const assignRanks = (rows) => {
-      let rank = 0;
-      let lastMs = null;
-      return rows.map((row) => {
-        if (lastMs === null || row.totalMs !== lastMs) {
-          rank += 1;
-          lastMs = row.totalMs;
-        }
-        return { ...row, rank };
-      });
-    };
-
-    const roomRank = assignRanks(buildWeeklyRows(roomWeek));
-    const courseRank = assignRanks(buildWeeklyRows(courseWeek, roomWeek));
-
-    const roomUnique = roomRank.length;
-    const courseUnique = courseRank.length;
-
-    if (joinedCount) joinedCount.textContent = `Joined: ${roomUnique}`;
-    if (courseCount) courseCount.textContent = `Course entered: ${courseUnique}`;
+    const roomRank = [];
+    const courseRank = [];
+    
+    if (joinedCount) joinedCount.textContent = `Joined: 0`;
+    if (courseCount) courseCount.textContent = `Course entered: 0`;
 
     const renderRankList = (target, items, emptyText, type) => {
       if (!target) return;
@@ -5961,17 +5923,7 @@ function scheduleSessionAutoExpiry() {
 
 
 async function syncPersonalAccumulatedTime(seatCode) {
-  let path = `weeklyHours/${getWeekIdentifier()}/${seatCode}`;
-  if (currentSelectedTimeframe === "today") path = `dailyHours/${getTodayIdentifier()}/${seatCode}`;
-  if (currentSelectedTimeframe === "month") path = `monthlyHours/${getMonthIdentifier()}/${seatCode}`;
-  if (currentSelectedTimeframe === "all") path = `allTimeHours/${seatCode}`;
-
-  const onceSnap = await db.ref(path).get().catch(() => null);
-  let historicalMs = onceSnap?.val() || 0;
-  if (currentUser && currentUser.code === seatCode) {
-    historicalMs += getElapsedSessionMsFromUser(currentUser);
-  }
-  weeklyMinutesVal.innerText = formatHoursMinutes(historicalMs);
+  weeklyMinutesVal.innerText = formatHoursMinutes(0);
   personalWeeklyBox.classList.remove("hidden");
 }
 
