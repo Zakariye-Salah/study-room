@@ -25,7 +25,7 @@ const SEATS = {
 };
 
 // SESSION LIMITS & AUTO-KICK CONFIGURATION
-const SESSION_LIMIT = 3 * 60 * 60 * 1000; 
+const SESSION_LIMIT = 5 * 60 * 60 * 1000; 
 const MIN_VISIBLE_SESSION_MS = 1000;
 let autoRemovalTimeoutInstance = null;
 let courseTimerIntervalInstance = null;
